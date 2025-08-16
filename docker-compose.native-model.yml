@@ -1,0 +1,298 @@
+networks:
+  lifestrands-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  logs-data:
+    driver: local
+
+services:
+  # ================================
+  # Database Services
+  # ================================
+  
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: lifestrands-postgres
+    environment:
+      POSTGRES_DB: lifestrands
+      POSTGRES_USER: lifestrands_user
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-lifestrands_password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lifestrands_user -d lifestrands"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: lifestrands-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_password} --maxmemory 1gb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.11
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a ${REDIS_PASSWORD:-redis_password} ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ================================
+  # Core Application Services
+  # ================================
+  # NOTE: Model service runs natively on Windows for GPU access
+
+  gateway-service:
+    build:
+      context: ./services/gateway-service
+      dockerfile: Dockerfile
+    container_name: lifestrands-gateway
+    environment:
+      - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@172.20.0.10:5432/lifestrands
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@172.20.0.11:6379
+      - CHAT_SERVICE_URL=http://172.20.0.30:8002
+      - NPC_SERVICE_URL=http://172.20.0.40:8003
+      - SUMMARY_SERVICE_URL=http://172.20.0.50:8004
+      - MONITOR_SERVICE_URL=http://172.20.0.60:8005
+      # Point to Windows host IP for native model service
+      - MODEL_SERVICE_URL=http://host.docker.internal:8001
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-60}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.200
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  chat-service:
+    build:
+      context: ./services/chat-service
+      dockerfile: Dockerfile
+    container_name: lifestrands-chat-service
+    environment:
+      - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@172.20.0.10:5432/lifestrands
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@172.20.0.11:6379
+      - NPC_SERVICE_URL=http://172.20.0.40:8003
+      # Point to Windows host IP for native model service
+      - MODEL_SERVICE_URL=http://host.docker.internal:8001
+      - SUMMARY_SERVICE_URL=http://172.20.0.50:8004
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8002:8002"
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.30
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  npc-service:
+    build:
+      context: ./services/npc-service
+      dockerfile: Dockerfile
+    container_name: lifestrands-npc-service
+    environment:
+      - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@172.20.0.10:5432/lifestrands
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@172.20.0.11:6379
+      # Point to Windows host IP for native model service
+      - MODEL_SERVICE_URL=http://host.docker.internal:8001
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-384}
+    ports:
+      - "8003:8003"
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.40
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  summary-service:
+    build:
+      context: ./services/summary-service
+      dockerfile: Dockerfile
+    container_name: lifestrands-summary-service
+    environment:
+      - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@172.20.0.10:5432/lifestrands
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@172.20.0.11:6379
+      - NPC_SERVICE_URL=http://172.20.0.40:8003
+      # Point to Windows host IP for native model service
+      - MODEL_SERVICE_URL=http://host.docker.internal:8001
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8004:8004"
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.50
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  monitor-service:
+    build:
+      context: ./services/monitor-service
+      dockerfile: Dockerfile
+    container_name: lifestrands-monitor-service
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@172.20.0.11:6379
+      - GATEWAY_SERVICE_URL=http://172.20.0.200:8000
+      - CHAT_SERVICE_URL=http://172.20.0.30:8002
+      - NPC_SERVICE_URL=http://172.20.0.40:8003
+      - SUMMARY_SERVICE_URL=http://172.20.0.50:8004
+      # Point to Windows host IP for native model service
+      - MODEL_SERVICE_URL=http://host.docker.internal:8001
+      - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@172.20.0.10:5432/lifestrands
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ALERT_EMAIL=${ALERT_EMAIL:-admin@lifestrands.local}
+    ports:
+      - "8005:8005"
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.60
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  # ================================
+  # Supporting Services
+  # ================================
+
+  nginx:
+    image: nginx:alpine
+    container_name: lifestrands-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.100
+    depends_on:
+      - gateway-service
+      - chat-service
+      - npc-service
+      - summary-service
+      - monitor-service
+    restart: unless-stopped
+
+  # ================================
+  # Management and Monitoring
+  # ================================
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: lifestrands-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@lifestrands.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin_password}
+    ports:
+      - "8080:80"
+    volumes:
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.110
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: lifestrands-redis-commander
+    environment:
+      - REDIS_HOSTS=local:172.20.0.11:6379:0:${REDIS_PASSWORD:-redis_password}
+    ports:
+      - "8081:8081"
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.111
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # ================================
+  # Monitoring Stack
+  # ================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: lifestrands-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.120
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: lifestrands-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin_password}
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.130
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: lifestrands-jaeger
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+    ports:
+      - "16686:16686"
+      - "14268:14268"
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.140
+    restart: unless-stopped

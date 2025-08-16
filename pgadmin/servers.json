@@ -1,0 +1,14 @@
+{
+    "Servers": {
+        "1": {
+            "Name": "Life Strands Database",
+            "Group": "Servers",
+            "Host": "postgres",
+            "Port": 5432,
+            "MaintenanceDB": "lifestrands",
+            "Username": "lifestrands_user",
+            "PassFile": "/tmp/pgpass",
+            "SSLMode": "prefer"
+        }
+    }
+}

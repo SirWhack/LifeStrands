@@ -1,0 +1,435 @@
+networks:
+  lifestrands-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  models-data:
+    driver: local
+  logs-data:
+    driver: local
+
+services:
+  # ================================
+  # Database Services
+  # ================================
+  
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: lifestrands-postgres
+    environment:
+      POSTGRES_DB: lifestrands
+      POSTGRES_USER: lifestrands_user
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-lifestrands_password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lifestrands_user -d lifestrands"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: lifestrands-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_password} --maxmemory 1gb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.11
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ================================
+  # Core Application Services
+  # ================================
+
+  model-service:
+    build:
+      context: ./services/model-service
+      dockerfile: Dockerfile
+    container_name: lifestrands-model-service
+    environment:
+      - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@postgres:5432/lifestrands
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379
+      - MODELS_PATH=/models
+      - CHAT_MODEL=${CHAT_MODEL:-Gryphe_Codex-24B-Small-3.2-Q6_K_L.gguf}
+      - SUMMARY_MODEL=${SUMMARY_MODEL:-dphn.Dolphin-Mistral-24B-Venice-Edition.Q6_K.gguf}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2.F32.gguf}
+      - MIN_VRAM_MB=${MIN_VRAM_MB:-8000}
+      - CHAT_CONTEXT_SIZE=${CHAT_CONTEXT_SIZE:-8192}
+      - SUMMARY_CONTEXT_SIZE=${SUMMARY_CONTEXT_SIZE:-4096}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - HSA_OVERRIDE_GFX_VERSION=11.0.0
+      - HIP_VISIBLE_DEVICES=0
+      - HIP_PLATFORM=amd
+      - ROCR_VISIBLE_DEVICES=0
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./Models:/models:ro
+      - logs-data:/app/logs
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.20
+    depends_on:
+      - postgres
+      - redis
+    deploy:
+      resources:
+        limits:
+          memory: ${MODEL_SERVICE_MEMORY_LIMIT:-16384m}
+          cpus: '${MODEL_SERVICE_CPU_LIMIT:-4}'
+    restart: unless-stopped
+    # GPU access - commented out until ROCm drivers installed
+    # devices:
+    #   - /dev/kfd:/dev/kfd
+    #   - /dev/dri:/dev/dri
+
+  chat-service:
+    build:
+      context: ./services/chat-service
+      dockerfile: Dockerfile
+    container_name: lifestrands-chat-service
+    environment:
+      - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@postgres:5432/lifestrands
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379
+      - MODEL_SERVICE_URL=http://model-service:8001
+      - NPC_SERVICE_URL=http://npc-service:8003
+      - MAX_CONCURRENT_CONVERSATIONS=${MAX_CONCURRENT_CONVERSATIONS:-50}
+      - CONVERSATION_TIMEOUT_MINUTES=${CONVERSATION_TIMEOUT_MINUTES:-30}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8002:8002"
+    volumes:
+      - logs-data:/app/logs
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.21
+    depends_on:
+      - postgres
+      - redis
+      - model-service
+    deploy:
+      resources:
+        limits:
+          memory: ${CHAT_SERVICE_MEMORY_LIMIT:-2048m}
+          cpus: '${CHAT_SERVICE_CPU_LIMIT:-2}'
+    restart: unless-stopped
+
+  npc-service:
+    build:
+      context: ./services/npc-service
+      dockerfile: Dockerfile
+    container_name: lifestrands-npc-service
+    environment:
+      - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@postgres:5432/lifestrands
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379
+      - MODEL_SERVICE_URL=http://model-service:8001
+      - ENABLE_EMBEDDINGS=${ENABLE_EMBEDDINGS:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8003:8003"
+    volumes:
+      - logs-data:/app/logs
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.22
+    depends_on:
+      - postgres
+      - redis
+      - model-service
+    deploy:
+      resources:
+        limits:
+          memory: ${NPC_SERVICE_MEMORY_LIMIT:-2048m}
+          cpus: '${NPC_SERVICE_CPU_LIMIT:-2}'
+    restart: unless-stopped
+
+  summary-service:
+    build:
+      context: ./services/summary-service
+      dockerfile: Dockerfile
+    container_name: lifestrands-summary-service
+    environment:
+      - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@postgres:5432/lifestrands
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379
+      - MODEL_SERVICE_URL=http://model-service:8001
+      - NPC_SERVICE_URL=http://npc-service:8003
+      - SUMMARY_AUTO_APPROVAL_THRESHOLD=${SUMMARY_AUTO_APPROVAL_THRESHOLD:-0.8}
+      - SUMMARY_WORKER_CONCURRENCY=${SUMMARY_WORKER_CONCURRENCY:-3}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8004:8004"
+    volumes:
+      - logs-data:/app/logs
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.23
+    depends_on:
+      - postgres
+      - redis
+      - model-service
+      - npc-service
+    deploy:
+      resources:
+        limits:
+          memory: ${SUMMARY_SERVICE_MEMORY_LIMIT:-4096m}
+          cpus: '${SUMMARY_SERVICE_CPU_LIMIT:-2}'
+    restart: unless-stopped
+
+  monitor-service:
+    build:
+      context: ./services/monitor-service
+      dockerfile: Dockerfile
+    container_name: lifestrands-monitor-service
+    environment:
+      - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@postgres:5432/lifestrands
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379
+      - MODEL_SERVICE_URL=http://model-service:8001
+      - CHAT_SERVICE_URL=http://chat-service:8002
+      - NPC_SERVICE_URL=http://npc-service:8003
+      - SUMMARY_SERVICE_URL=http://summary-service:8004
+      - METRICS_RETENTION_DAYS=${METRICS_RETENTION_DAYS:-30}
+      - ALERT_WEBHOOK=${ALERT_WEBHOOK}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8005:8005"
+    volumes:
+      - logs-data:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # For container monitoring
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.24
+    depends_on:
+      - postgres
+      - redis
+    deploy:
+      resources:
+        limits:
+          memory: ${MONITOR_SERVICE_MEMORY_LIMIT:-1024m}
+          cpus: '${MONITOR_SERVICE_CPU_LIMIT:-1}'
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ./services/gateway-service
+      dockerfile: Dockerfile
+    container_name: lifestrands-gateway
+    environment:
+      - MODEL_SERVICE_URL=http://model-service:8001
+      - CHAT_SERVICE_URL=http://chat-service:8002
+      - NPC_SERVICE_URL=http://npc-service:8003
+      - SUMMARY_SERVICE_URL=http://summary-service:8004
+      - MONITOR_SERVICE_URL=http://monitor-service:8005
+      - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-here}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
+      - RATE_LIMIT_REQUESTS_PER_MINUTE=${RATE_LIMIT_REQUESTS_PER_MINUTE:-100}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    volumes:
+      - logs-data:/app/logs
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.25
+    depends_on:
+      - model-service
+      - chat-service
+      - npc-service
+      - summary-service
+      - monitor-service
+    deploy:
+      resources:
+        limits:
+          memory: ${GATEWAY_MEMORY_LIMIT:-1024m}
+          cpus: '${GATEWAY_CPU_LIMIT:-2}'
+    restart: unless-stopped
+
+  # ================================
+  # Supporting Services
+  # ================================
+
+  nginx:
+    image: nginx:alpine
+    container_name: lifestrands-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - logs-data:/var/log/nginx
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.30
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  # ================================
+  # Monitoring Stack (Optional)
+  # ================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: lifestrands-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.40
+    restart: unless-stopped
+    profiles: ["monitoring"]
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: lifestrands-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.41
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: lifestrands-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # Jaeger collector
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.42
+    restart: unless-stopped
+    profiles: ["monitoring"]
+
+  # ================================
+  # Development Tools (Optional)
+  # ================================
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: lifestrands-pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@lifestrands.com}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin123}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    ports:
+      - "8080:80"
+    volumes:
+      - ./pgadmin/servers.json:/pgadmin4/servers.json
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.50
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    profiles: ["dev-tools"]
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: lifestrands-redis-commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379:0:${REDIS_PASSWORD:-redis_password}
+    ports:
+      - "8081:8081"
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.51
+    depends_on:
+      - redis
+    restart: unless-stopped
+    profiles: ["dev-tools"]
+
+  # ================================
+  # Frontend Applications (Optional)
+  # ================================
+
+  chat-interface:
+    build:
+      context: ./frontends/chat-interface
+      dockerfile: Dockerfile
+    container_name: lifestrands-chat-interface
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000
+    ports:
+      - "3001:3000"
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.60
+    depends_on:
+      - gateway
+    restart: unless-stopped
+    profiles: ["frontend"]
+
+  admin-dashboard:
+    build:
+      context: ./frontends/admin-dashboard
+      dockerfile: Dockerfile
+    container_name: lifestrands-admin-dashboard
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000
+    ports:
+      - "3002:3000"
+    networks:
+      lifestrands-network:
+        ipv4_address: 172.20.0.61
+    depends_on:
+      - gateway
+    restart: unless-stopped
+    profiles: ["frontend"]
+
+# ================================
+# Health Checks and Dependencies
+# ================================
+
+x-healthcheck-defaults: &healthcheck_defaults
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30s

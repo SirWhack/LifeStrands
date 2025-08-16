@@ -1,0 +1,42 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'gateway'
+    static_configs:
+      - targets: ['gateway:8000']
+    metrics_path: '/metrics'
+
+  - job_name: 'model-service'
+    static_configs:
+      - targets: ['host.docker.internal:8001']
+    metrics_path: '/metrics'
+
+  - job_name: 'chat-service'
+    static_configs:
+      - targets: ['chat-service:8002']
+    metrics_path: '/metrics'
+
+  - job_name: 'npc-service'
+    static_configs:
+      - targets: ['npc-service:8003']
+    metrics_path: '/metrics'
+
+  - job_name: 'summary-service'
+    static_configs:
+      - targets: ['summary-service:8004']
+    metrics_path: '/metrics'
+
+  - job_name: 'monitor-service'
+    static_configs:
+      - targets: ['monitor-service:8005']
+    metrics_path: '/metrics'
