@@ -115,7 +115,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@postgres:5432/lifestrands
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379
-      - MODEL_SERVICE_URL=http://model-service:8001
+      - MODEL_SERVICE_URL=http://host.docker.internal:8001
       - NPC_SERVICE_URL=http://npc-service:8003
       - MAX_CONCURRENT_CONVERSATIONS=${MAX_CONCURRENT_CONVERSATIONS:-50}
       - CONVERSATION_TIMEOUT_MINUTES=${CONVERSATION_TIMEOUT_MINUTES:-30}

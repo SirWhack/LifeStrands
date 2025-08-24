@@ -11,6 +11,7 @@ from src.queue_consumer import QueueConsumer
 from src.summary_generator import SummaryGenerator
 from src.change_extractor import ChangeExtractor
 from src.memory_updater import MemoryUpdater
+import aiohttp
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +23,7 @@ npc_service_url = os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
 
 queue_consumer = QueueConsumer()
 summary_generator = SummaryGenerator(model_service_url)
-change_extractor = ChangeExtractor()
+change_extractor = ChangeExtractor(model_service_url)
 memory_updater = MemoryUpdater(npc_service_url)
 
 class GenerateSummaryRequest(BaseModel):
@@ -33,7 +34,7 @@ class GenerateSummaryRequest(BaseModel):
 
 class ApplyUpdatesRequest(BaseModel):
     npc_id: str
-    updates: Dict[str, Any]
+    changes: List[Dict[str, Any]]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -78,20 +79,12 @@ async def health_check():
 async def generate_summary(request: GenerateSummaryRequest):
     """Generate conversation summary and extract Life Strand changes"""
     try:
-        # Generate summary
-        summary = await summary_generator.generate_conversation_summary(
-            request.session_id,
-            request.npc_id,
-            request.user_id,
-            request.messages
-        )
-        
-        # Extract potential changes
-        changes = await change_extractor.extract_changes(
-            request.npc_id,
-            request.messages,
-            summary
-        )
+        # Generate a concise summary from the messages
+        summary = await summary_generator.generate_summary(request.messages)
+
+        # Fetch NPC Life Strand context and extract changes
+        life_strand = await _fetch_life_strand(request.npc_id)
+        changes = await change_extractor.analyze_conversation(request.messages, life_strand)
         
         logger.info(f"Generated summary for session {request.session_id}")
         
@@ -99,7 +92,7 @@ async def generate_summary(request: GenerateSummaryRequest):
             "session_id": request.session_id,
             "summary": summary,
             "extracted_changes": changes,
-            "auto_apply": await _should_auto_apply(changes)
+            "auto_apply": _should_auto_apply_list(changes)
         }
         
     except Exception as e:
@@ -110,16 +103,9 @@ async def generate_summary(request: GenerateSummaryRequest):
 async def apply_npc_updates(request: ApplyUpdatesRequest):
     """Apply approved changes to NPC Life Strand"""
     try:
-        success = await memory_updater.apply_updates(
-            request.npc_id,
-            request.updates
-        )
-        
-        if success:
-            logger.info(f"Applied updates to NPC {request.npc_id}")
-            return {"message": "Updates applied successfully"}
-        else:
-            raise HTTPException(status_code=404, detail="NPC not found")
+        await memory_updater.apply_changes(request.npc_id, request.changes)
+        logger.info(f"Applied updates to NPC {request.npc_id}")
+        return {"message": "Updates applied successfully"}
             
     except HTTPException:
         raise
@@ -155,50 +141,8 @@ async def retry_failed_jobs():
         logger.error(f"Error retrying failed jobs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/npc/{npc_id}/pending-updates")
-async def get_pending_updates(npc_id: str):
-    """Get pending Life Strand updates for review"""
-    try:
-        updates = await memory_updater.get_pending_updates(npc_id)
-        return {"pending_updates": updates}
-        
-    except Exception as e:
-        logger.error(f"Error getting pending updates for NPC {npc_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/npc/{npc_id}/approve-update/{update_id}")
-async def approve_pending_update(npc_id: str, update_id: str):
-    """Approve a pending Life Strand update"""
-    try:
-        success = await memory_updater.approve_update(npc_id, update_id)
-        
-        if success:
-            return {"message": "Update approved and applied"}
-        else:
-            raise HTTPException(status_code=404, detail="Update not found")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error approving update {update_id} for NPC {npc_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/npc/{npc_id}/reject-update/{update_id}")
-async def reject_pending_update(npc_id: str, update_id: str):
-    """Reject a pending Life Strand update"""
-    try:
-        success = await memory_updater.reject_update(npc_id, update_id)
-        
-        if success:
-            return {"message": "Update rejected"}
-        else:
-            raise HTTPException(status_code=404, detail="Update not found")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error rejecting update {update_id} for NPC {npc_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# NOTE: pending-updates/approve/reject endpoints were removed because
+# they are not implemented in MemoryUpdater. Re-add them when ready.
 
 @app.get("/stats")
 async def get_service_stats():
@@ -207,8 +151,7 @@ async def get_service_stats():
         stats = {
             "total_summaries_generated": summary_generator.get_total_summaries(),
             "total_updates_applied": memory_updater.get_total_updates(),
-            "queue_status": await queue_consumer.get_queue_status(),
-            "auto_approval_rate": await _get_auto_approval_rate()
+            "queue_status": await queue_consumer.get_queue_status()
         }
         
         return stats
@@ -217,38 +160,48 @@ async def get_service_stats():
         logger.error(f"Error getting service stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def _should_auto_apply(changes: Dict[str, Any]) -> bool:
-    """Determine if changes should be auto-applied based on confidence scores"""
+@app.get("/metrics")
+async def get_metrics():
+    """Get Prometheus metrics for monitoring"""
     try:
-        # Get auto-approval threshold from environment
-        import os
+        queue_status = await queue_consumer.get_queue_status()
+        return {
+            "summary_service_queue_length": queue_status.get("length", 0),
+            "summary_service_total_processed": queue_consumer.get_processed_count(),
+            "summary_service_processing_active": 1 if queue_consumer.is_processing() else 0,
+            "summary_service_status": 1
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def _should_auto_apply_list(changes: List[Dict[str, Any]]) -> bool:
+    """Auto-apply only if every change meets the confidence threshold."""
+    try:
         threshold = float(os.getenv("SUMMARY_AUTO_APPROVAL_THRESHOLD", "0.8"))
-        
-        # Check confidence scores for all changes
-        for change in changes.get("memory_updates", []):
-            if change.get("confidence", 0) < threshold:
+        if not changes:
+            return False
+        for change in changes:
+            if float(change.get("confidence_score", 0.0)) < threshold:
                 return False
-                
-        for change in changes.get("relationship_updates", []):
-            if change.get("confidence", 0) < threshold:
-                return False
-                
-        for change in changes.get("knowledge_updates", []):
-            if change.get("confidence", 0) < threshold:
-                return False
-                
         return True
-        
     except Exception as e:
         logger.error(f"Error determining auto-apply status: {e}")
         return False
 
-async def _get_auto_approval_rate() -> float:
-    """Calculate the auto-approval rate for recent updates"""
+async def _fetch_life_strand(npc_id: str) -> Dict[str, Any]:
+    """Fetch NPC Life Strand from the NPC service for change extraction."""
     try:
-        return await memory_updater.get_auto_approval_rate()
-    except Exception:
-        return 0.0
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{npc_service_url}/npc/{npc_id}", timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                logger.warning(f"NPC service returned {resp.status} for npc_id={npc_id}")
+                return {}
+    except Exception as e:
+        logger.error(f"Error fetching life strand for NPC {npc_id}: {e}")
+        return {}
 
 if __name__ == "__main__":
     import uvicorn

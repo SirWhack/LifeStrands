@@ -3,12 +3,12 @@ import logging
 from typing import AsyncGenerator, Dict, Any, Optional
 import os
 from contextlib import asynccontextmanager
+import concurrent.futures
 
 logger = logging.getLogger(__name__)
 
 try:
-    from llama_cpp import Llama, LlamaGrammar
-    from llama_cpp.llama_tokenizer import LlamaHFTokenizer
+    from llama_cpp import Llama
     LLAMA_CPP_AVAILABLE = True
 except ImportError:
     LLAMA_CPP_AVAILABLE = False
@@ -21,14 +21,26 @@ class LlamaWrapper:
         self.model: Optional[Llama] = None
         self.model_path: Optional[str] = None
         self.config: Dict[str, Any] = {}
+        
+        # Safe parameter allowlists for llama-cpp-python
+        self.supported_model_params = {
+            "model_path", "n_ctx", "n_batch", "n_gpu_layers", "n_threads",
+            "use_mmap", "use_mlock", "seed", "verbose", "logits_all", 
+            "vocab_only", "embedding"
+        }
+        
+        self.supported_generation_params = {
+            "max_tokens", "temperature", "top_p", "top_k", "repeat_penalty",
+            "stop", "stream", "echo", "suffix", "logprobs", "tfs_z", 
+            "typical_p", "mirostat_mode", "mirostat_tau", "mirostat_eta"
+        }
+        
         self.default_params = {
             "max_tokens": 512,
             "temperature": 0.8,
             "top_p": 0.95,
             "top_k": 40,
             "repeat_penalty": 1.1,
-            "frequency_penalty": 0.0,
-            "presence_penalty": 0.0,
             "stop": ["</s>", "\n\n"],
             "stream": True
         }
@@ -44,31 +56,24 @@ class LlamaWrapper:
                 
             logger.info(f"Loading model from {model_path}")
             
-            # Default model parameters
-            model_params = {
-                "model_path": model_path,
-                "n_ctx": config.get("n_ctx", 4096),
-                "n_batch": config.get("n_batch", 512),
-                "n_gpu_layers": config.get("n_gpu_layers", -1),
-                "verbose": config.get("verbose", False),
-                "use_mmap": config.get("use_mmap", True),
-                "use_mlock": config.get("use_mlock", False),
-                "n_threads": config.get("n_threads", None),
-                "f16_kv": config.get("f16_kv", True),
-                "logits_all": config.get("logits_all", False),
-                "vocab_only": config.get("vocab_only", False),
-                "seed": config.get("seed", -1),
-                "low_vram": config.get("low_vram", False)
-            }
+            # Build model parameters safely
+            model_params = {"model_path": model_path}
             
-            # Remove None values and filter out unsupported options
-            model_params = {k: v for k, v in model_params.items() if v is not None}
+            # Add only supported parameters from config
+            for param in self.supported_model_params:
+                if param in config and config[param] is not None:
+                    model_params[param] = config[param]
             
-            # Filter out potentially unsupported options for older llama-cpp-python versions
-            if "low_vram" in model_params and not model_params["low_vram"]:
-                del model_params["low_vram"]
-            if "f16_kv" in model_params and not model_params["f16_kv"]:
-                del model_params["f16_kv"]
+            # Set safe defaults for missing critical parameters
+            model_params.setdefault("n_ctx", 4096)
+            model_params.setdefault("n_batch", 512)
+            model_params.setdefault("n_gpu_layers", -1)
+            model_params.setdefault("verbose", False)
+            model_params.setdefault("use_mmap", True)
+            model_params.setdefault("use_mlock", False)
+            model_params.setdefault("seed", -1)
+            
+            logger.info(f"Filtered model params: {list(model_params.keys())}")
             
             self.model = Llama(**model_params)
             self.model_path = model_path
@@ -93,24 +98,28 @@ class LlamaWrapper:
             raise RuntimeError("No model loaded")
             
         try:
-            # Merge parameters
-            params = {**self.default_params, **kwargs}
+            # Merge and filter parameters safely
+            merged_params = {**self.default_params, **kwargs}
+            params = {k: v for k, v in merged_params.items() 
+                     if k in self.supported_generation_params}
             
             # Ensure streaming is enabled
             params["stream"] = True
             
-            logger.debug(f"Generating with params: {params}")
+            logger.debug(f"Filtered generation params: {list(params.keys())}")
             
-            # Use a queue to pass tokens from worker thread to async generator
-            import asyncio
-            token_queue = asyncio.Queue()
-            loop = asyncio.get_event_loop()
+            # Use a bounded queue to pass tokens from worker thread to async generator
+            token_queue = asyncio.Queue(maxsize=256)
+            loop = asyncio.get_running_loop()
+            stop_event = asyncio.Event()
             
             def _generate_worker():
                 """Worker function that runs in thread pool"""
                 try:
                     response_stream = self.model(prompt, **params)
                     for chunk in response_stream:
+                        if stop_event.is_set():
+                            break
                         if "choices" in chunk and len(chunk["choices"]) > 0:
                             choice = chunk["choices"][0]
                             if "text" in choice:
@@ -131,23 +140,39 @@ class LlamaWrapper:
                         token_queue.put(e), loop
                     )
                     
-            # Start generation in thread pool
-            await loop.run_in_executor(None, _generate_worker)
+            # Start generation in a thread pool executor
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_generate_worker)
             
-            # Yield tokens from queue
-            while True:
-                item = await token_queue.get()
-                if item is None:
-                    # Completion signal
-                    break
-                elif isinstance(item, Exception):
-                    # Error signal
-                    raise item
-                else:
-                    # Token
-                    yield item
-                    # Small delay to prevent overwhelming the consumer
-                    await asyncio.sleep(0.001)
+                # Yield tokens from queue
+                try:
+                    while True:
+                        item = await token_queue.get()
+                        if item is None:
+                            # Completion signal
+                            break
+                        elif isinstance(item, Exception):
+                            # Error signal
+                            stop_event.set()
+                            raise item
+                        else:
+                            # Token
+                            yield item
+                            # Small delay to prevent overwhelming the consumer
+                            await asyncio.sleep(0.001)
+                finally:
+                    # Ensure worker is stopped and completed
+                    stop_event.set()
+                    try:
+                        # Wait for the worker thread to complete with timeout
+                        await asyncio.wait_for(
+                            asyncio.wrap_future(future), 
+                            timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Worker thread did not complete within timeout")
+                    except Exception as e:
+                        logger.debug(f"Worker completion error: {e}")
                             
         except Exception as e:
             logger.error(f"Error generating tokens: {e}")
@@ -156,14 +181,9 @@ class LlamaWrapper:
     def adjust_parameters(self, params: dict):
         """Dynamically adjust generation parameters"""
         try:
-            # Validate parameters
-            valid_params = {
-                "max_tokens", "temperature", "top_p", "top_k", 
-                "repeat_penalty", "frequency_penalty", "presence_penalty",
-                "stop", "stream"
-            }
-            
-            filtered_params = {k: v for k, v in params.items() if k in valid_params}
+            # Filter to only supported parameters
+            filtered_params = {k: v for k, v in params.items() 
+                             if k in self.supported_generation_params}
             
             if filtered_params:
                 self.default_params.update(filtered_params)
@@ -260,6 +280,11 @@ class LlamaWrapper:
                 self.model = None
                 self.model_path = None
                 self.config = {}
+                
+                # Force garbage collection to free memory
+                import gc
+                gc.collect()
+                
                 logger.info("Model unloaded successfully")
                 
         except Exception as e:

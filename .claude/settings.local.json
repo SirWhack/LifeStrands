@@ -41,8 +41,21 @@
       "Bash(./rocm_env/Scripts/python.exe test_gpu_load.py)",
       "Bash(mv:*)",
       "Bash(chmod:*)",
-      "Bash(powershell.exe:*)"
+      "Bash(powershell.exe:*)",
+      "Bash(git pull:*)",
+      "Bash(git config:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(ENABLE_EMBEDDINGS=false docker-compose up -d npc-service)",
+      "Bash(ENABLE_EMBEDDINGS=false docker-compose up -d)",
+      "Bash(npm install)",
+      "Bash(npm run dev:*)",
+      "Bash(python:*)",
+      "Bash(cd:*)",
+      "Bash(scripts/start_model_service_wsl.sh:*)"
     ],
     "deny": []
-  }
+  },
+  "outputStyle": "default"
 }

@@ -1,67 +1,61 @@
 import { useState, useEffect, useCallback } from 'react';
 
+// Life Strand schema matching our actual NPC service
 export interface LifeStrand {
-  core_identity: {
-    name: string;
+  id: string;
+  schema_version: string;
+  name: string;
+  background: {
     age: number;
-    background: string;
-    personality_traits: string[];
-    goals: string[];
+    occupation: string;
+    location: string;
+    history: string;
+    family?: string[];
+    education?: string;
+  };
+  personality: {
+    traits: string[];
+    motivations: string[];
     fears: string[];
+    values: string[];
+    quirks?: string[];
+  };
+  current_status: {
+    mood: string;
+    health: string;
+    energy: string;
+    location: string;
+    activity: string;
   };
   relationships: {
     [key: string]: {
-      relationship_type: string;
-      relationship_strength: number;
-      shared_memories: string[];
-      emotional_context: string;
+      type: string;
+      status: string;
+      intensity: number;
+      notes: string;
     };
   };
-  memories: {
-    significant_events: {
-      event: string;
-      emotional_impact: number;
-      date: string;
-      participants: string[];
-    }[];
-    learned_information: {
-      topic: string;
-      details: string;
-      source: string;
-      confidence: number;
-      date_learned: string;
-    }[];
-  };
-  current_state: {
-    mood: string;
-    energy_level: number;
-    stress_level: number;
-    current_location: string;
-    active_goals: string[];
-    recent_concerns: string[];
-  };
-  conversational_style: {
-    preferred_topics: string[];
-    communication_patterns: string[];
-    speech_quirks: string[];
-    emotional_triggers: string[];
-  };
-}
-
-export interface NPC {
-  id: string;
+  knowledge: Array<{
+    topic: string;
+    content: string;
+    source: string;
+    confidence: number;
+  }>;
+  memories: Array<{
+    content: string;
+    timestamp: string;
+    importance: number;
+    emotional_impact: string;
+    people_involved: string[];
+    tags: string[];
+  }>;
+  status: string;
   created_at: string;
   updated_at: string;
-  version: number;
-  life_strand: LifeStrand;
-  metadata: {
-    creator: string;
-    tags: string[];
-    is_active: boolean;
-    total_conversations: number;
-    last_conversation_at?: string;
-  };
 }
+
+// NPC type that matches our API response (LifeStrand is the full NPC data)
+export type NPC = LifeStrand;
 
 interface UseNPCOptions {
   apiBaseUrl?: string;

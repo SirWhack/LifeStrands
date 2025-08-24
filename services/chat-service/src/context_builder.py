@@ -157,7 +157,7 @@ class ContextBuilder:
             # Calculate target character length
             target_chars = limit * 4
             
-            # Try to truncate intelligently at sentence boundaries
+            # Split on sentence boundaries after . ! ?
             sentences = re.split(r'(?<=[.!?])\s+', context)
             
             truncated = []

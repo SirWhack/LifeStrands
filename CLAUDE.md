@@ -133,6 +133,14 @@ NPCs support semantic similarity search via pgvector:
 
 ## Key Implementation Details
 
+### Native Windows Model Service
+The Model Service runs **natively on Windows** (not in Docker) for optimal GPU performance:
+- **Vulkan Acceleration**: Uses AMD 7900 XTX with Vulkan drivers (NOT ROCm)
+- **Direct GPU Access**: Bypasses Docker overhead for maximum performance
+- **Native Integration**: Docker services connect via `host.docker.internal:8001`
+- **Memory Efficiency**: `use_mmap: False` prevents CPU RAM duplication
+- **24B Model Support**: Handles large models like Gryphe_Codex-24B-Small-3.2-Q6_K_L.gguf
+
 ### WebSocket Management
 Both chat and monitoring use WebSocket connections with auto-reconnect:
 - **Chat WebSocket** (`frontends/chat-interface/src/hooks/useWebSocket.ts`): Real-time conversation
@@ -150,6 +158,21 @@ JWT-based auth with role-based access control in `services/gateway-service/src/a
 ### Rate Limiting
 Configurable rate limiting in `services/gateway-service/src/rate_limiter.py` for API protection.
 
+### Data Validation and Schema Management
+The Life Strand schema uses comprehensive validation in `services/npc-service/src/life_strand_schema.py`:
+- **JSON Schema Validation**: Enforces data structure and types
+- **Custom Business Rules**: Age consistency, relationship intensity ranges
+- **Data Sanitization**: Truncates long fields, limits array sizes
+- **Schema Migration**: Version-aware data migration support
+- **Intelligent Merging**: Handles conversation updates without data loss
+
+### Context Building Strategy
+The Chat Service uses `services/chat-service/src/context_builder.py` to convert Life Strands into optimized prompts:
+- **Token Management**: Respects context window limits (8192 tokens default)
+- **Relevance Filtering**: Prioritizes recent memories and relationships
+- **Dynamic Truncation**: Removes oldest context when limits are reached
+- **Personality Emphasis**: Highlights core traits and motivations
+
 ## Testing Strategy
 
 - **Unit Tests**: Focus on individual components like context building and Life Strand validation
@@ -157,6 +180,67 @@ Configurable rate limiting in `services/gateway-service/src/rate_limiter.py` for
 - **Load Tests**: Concurrent conversations and memory stability during hot-swapping
 
 Test files located in `tests/` with subdirectories for `unit/`, `integration/`, and `load/` testing.
+
+### Running Specific Tests
+```bash
+# Run specific test file
+pytest tests/unit/test_context_builder.py -v
+
+# Run tests with specific markers
+pytest tests/integration/ -v -m "not slow"
+
+# Run with coverage for specific service
+pytest tests/unit/test_life_strand_schema.py --cov=services/npc-service
+```
+
+## Development Environment
+
+### Docker Compose Profiles
+The system uses multiple Docker Compose profiles for different scenarios:
+- **Default**: Core services (gateway, chat, npc, summary, monitor)
+- **dev-tools**: Adds pgAdmin and Redis Commander for development
+- **monitoring**: Adds Grafana, Prometheus, and Jaeger
+- **frontend**: React applications for chat interface and admin dashboard
+
+### Environment Configuration
+Key environment variables (configured via `.env`):
+- `CHAT_MODEL`: Filename of chat model (e.g., Gryphe_Codex-24B-Small-3.2-Q6_K_L.gguf)
+- `SUMMARY_MODEL`: Filename of summary model
+- `EMBEDDING_MODEL`: Filename of embedding model
+- `ENABLE_EMBEDDINGS`: Enable/disable embedding generation for search
+- `MIN_VRAM_MB`: Minimum VRAM required for model loading
+
+### Model Files Organization
+Models are stored in the `Models/` directory:
+- **Chat Models**: Large context models for conversations (24B parameters recommended)
+- **Summary Models**: Efficient models for conversation analysis
+- **Embedding Models**: Small models for vector generation (384-dimension)
+
+## Service-Specific Details
+
+### Model Service (`services/model-service/`)
+- **State Machine**: `src/state_machine.py` tracks model loading states
+- **Memory Monitor**: `src/memory_monitor.py` prevents VRAM exhaustion
+- **Llama Wrapper**: `src/llama_wrapper.py` interfaces with llama.cpp
+- **Threading**: Uses thread pools for non-blocking token generation
+
+### NPC Service (`services/npc-service/`)
+- **Life Strand Schema**: `src/life_strand_schema.py` defines data structure
+- **Repository Pattern**: `src/npc_repository.py` handles database operations
+- **Embedding Manager**: `src/embedding_manager.py` manages vector search
+- **pgvector Integration**: Uses PostgreSQL extension for similarity search
+
+### Chat Service (`services/chat-service/`)
+- **Session Management**: 30-minute timeout, Redis persistence
+- **Context Building**: Optimizes prompts for token efficiency
+- **Streaming**: Real-time token forwarding via WebSocket
+- **Conversation History**: Automatic truncation and relevance filtering
+
+### Summary Service (`services/summary-service/`)
+- **Queue Consumer**: Processes conversations asynchronously
+- **Change Extraction**: Identifies personality/relationship updates
+- **Memory Updates**: Applies changes to Life Strand data
+- **Auto-Approval**: Configurable confidence threshold for automatic updates
 
 ## Development Notes
 
@@ -166,3 +250,17 @@ Test files located in `tests/` with subdirectories for `unit/`, `integration/`, 
 - Docker Compose with development, monitoring, and frontend profiles
 - Structured logging with JSON format for production
 - GPU memory monitoring prevents VRAM exhaustion during model operations
+
+### Code Style and Patterns
+- **Async/Await**: All I/O operations use async patterns
+- **Dependency Injection**: Services configured via environment variables
+- **Error Handling**: Graceful degradation with fallback strategies
+- **Logging**: Structured JSON logging with contextual information
+- **Type Hints**: Python services use comprehensive type annotations
+
+### Performance Considerations
+- **Connection Pooling**: Database and Redis connections are pooled
+- **Batch Processing**: Embedding generation and database operations are batched
+- **Caching**: Frequent NPC data cached in Redis with TTL
+- **Memory Management**: Model service automatically manages GPU memory
+- **Context Optimization**: Chat service optimizes prompt size for model efficiency

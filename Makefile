@@ -20,6 +20,7 @@ help: ## Show available commands with descriptions
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Examples:"
+	@echo "  make setup-model          # Setup Windows model service (run first time)"
 	@echo "  make dev-up               # Start all services (Docker + Native Vulkan Model)"
 	@echo "  make dev-down             # Stop all services (Docker + Native Model)"
 	@echo "  make model-start-native   # Start only the model service in new terminal"
@@ -58,11 +59,26 @@ install-deps: ## Install development dependencies
 	@cd frontends/admin-dashboard && npm install
 	@echo "Dependencies installed successfully!"
 
-dev-up: ## Start all services in development mode (native Windows model service)
+setup-model: ## Setup Windows model service environment with Vulkan llama-cpp-python
+	@echo "Setting up Windows model service environment..."
+	@if grep -qi microsoft /proc/version 2>/dev/null; then \
+		echo "Detected WSL environment, running Windows PowerShell script..."; \
+		powershell.exe -ExecutionPolicy Bypass -File "setup_model_service_windows.ps1"; \
+	elif command -v powershell.exe >/dev/null 2>&1; then \
+		powershell.exe -ExecutionPolicy Bypass -File "setup_model_service_windows.ps1"; \
+	else \
+		echo "❌ Windows PowerShell not found. Please run manually:"; \
+		echo "   powershell.exe -ExecutionPolicy Bypass -File setup_model_service_windows.ps1"; \
+	fi
+
+dev-up: ## Start all services in development mode (Docker + native model + frontend)
 	@echo "Starting Life Strands System in development mode..."
 	@echo "Using native Windows model service for optimal GPU performance"
 	@echo ""
-	@echo "Step 1: Starting native Windows model service in new terminal..."
+	@echo "Step 1: Starting Docker services (excluding model service)..."
+	@docker-compose -f docker-compose.native-model.yml --profile dev-tools --profile frontend up -d
+	@echo ""
+	@echo "Step 2: Starting native Windows model service in new terminal..."
 	@if grep -qi microsoft /proc/version 2>/dev/null; then \
 		echo "Detected WSL environment, using WSL-compatible script..."; \
 		scripts/start_model_service_wsl.sh; \
@@ -76,11 +92,8 @@ dev-up: ## Start all services in development mode (native Windows model service)
 		echo "   cd services/model-service && python main.py"; \
 	fi
 	@echo ""
-	@echo "Step 2: Starting Docker services (excluding model service)..."
-	@docker-compose -f docker-compose.native-model.yml up -d
-	@echo ""
 	@echo "Step 3: Waiting for all services to be ready..."
-	@sleep 5
+	@sleep 8
 	@echo "All services starting... Use 'make logs' to monitor startup"
 	@echo ""
 	@echo "Available services:"
@@ -90,6 +103,8 @@ dev-up: ## Start all services in development mode (native Windows model service)
 	@echo "  NPC Service:       http://localhost:8003"
 	@echo "  Summary Service:   http://localhost:8004"
 	@echo "  Monitor Service:   http://localhost:8005"
+	@echo "  Chat Interface:    http://localhost:3001"
+	@echo "  Admin Dashboard:   http://localhost:3002"
 	@echo "  Database Admin:    http://localhost:8080 (pgAdmin)"
 	@echo "  Redis Admin:       http://localhost:8081 (Redis Commander)"
 	@echo "  Monitoring:        http://localhost:9090 (Prometheus)"

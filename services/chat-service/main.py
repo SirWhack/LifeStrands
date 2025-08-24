@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from src.conversation_manager import ConversationManager
@@ -45,6 +46,22 @@ app = FastAPI(
     description="Real-time conversation management service",
     version="1.0.0",
     lifespan=lifespan
+)
+
+# Add CORS middleware for frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # React frontend
+        "http://localhost:3001",  # Alternative frontend port
+        "http://localhost:3002",  # Admin dashboard
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.get("/health")

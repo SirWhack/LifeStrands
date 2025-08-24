@@ -1,0 +1,18 @@
+{
+  "life_strand": {
+    "name": "Valid Name",
+    "background": {
+      "age": 250,
+      "location": "Test Location"
+    },
+    "personality": {
+      "traits": ["brave"]
+    },
+    "relationships": {
+      "TestPerson": {
+        "type": "invalid_type",
+        "status": "positive"
+      }
+    }
+  }
+}

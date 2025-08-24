@@ -16,6 +16,33 @@ class LocalEmbeddingManager:
         self.session: Optional[aiohttp.ClientSession] = None
         self._lock = asyncio.Lock()
         
+    def is_enabled(self) -> bool:
+        """Check if embeddings are enabled"""
+        return self.embedding_enabled
+        
+    async def _post_with_retries(self, url: str, json_data: dict, headers: dict, attempts: int = 3, base_delay: float = 0.5) -> dict:
+        """HTTP POST with retry logic and exponential backoff"""
+        last_error = None
+        for attempt in range(attempts):
+            try:
+                async with self.session.post(url, json=json_data, headers=headers) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    error_text = await response.text()
+                    last_error = f"HTTP {response.status}: {error_text}"
+                    logger.warning(f"Attempt {attempt + 1}/{attempts} failed: {last_error}")
+                    
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"Attempt {attempt + 1}/{attempts} failed with exception: {last_error}")
+                
+            # Wait before retry (exponential backoff)
+            if attempt < attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                await asyncio.sleep(delay)
+                
+        raise RuntimeError(f"POST {url} failed after {attempts} attempts. Last error: {last_error}")
+        
     async def initialize(self):
         """Initialize the HTTP session for model service communication"""
         if not self.embedding_enabled:
@@ -26,9 +53,10 @@ class LocalEmbeddingManager:
             if self.session is None:
                 logger.info(f"Initializing embedding manager with model service: {self.model_service_url}")
                 try:
-                    # Create HTTP session without testing (embeddings disabled)
-                    self.session = aiohttp.ClientSession()
-                    logger.info("Embedding manager initialized (embeddings disabled)")
+                    # Create HTTP session with timeout
+                    timeout = aiohttp.ClientTimeout(total=30, connect=5, sock_read=25)
+                    self.session = aiohttp.ClientSession(timeout=timeout)
+                    logger.info("Embedding manager initialized successfully")
                     
                 except Exception as e:
                     logger.error(f"Failed to initialize embedding manager: {e}")
@@ -53,22 +81,18 @@ class LocalEmbeddingManager:
             if not text:
                 raise ValueError("Text cannot be empty")
                 
-            # Call model service embedding endpoint
-            async with self.session.post(
+            # Call model service embedding endpoint with retry logic
+            result = await self._post_with_retries(
                 f"{self.model_service_url}/embeddings",
-                json={"texts": [text]},
-                headers={"Content-Type": "application/json"}
-            ) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise Exception(f"Model service error {response.status}: {error_text}")
+                {"texts": [text]},
+                {"Content-Type": "application/json"}
+            )
+            
+            embeddings = result.get("embeddings", [])
+            if not embeddings:
+                raise Exception("No embeddings returned from model service")
                 
-                result = await response.json()
-                embeddings = result.get("embeddings", [])
-                if not embeddings:
-                    raise Exception("No embeddings returned from model service")
-                    
-                return embeddings[0]
+            return embeddings[0]
             
         except Exception as e:
             logger.error(f"Failed to generate embedding for text: {e}")
@@ -76,31 +100,35 @@ class LocalEmbeddingManager:
             
     async def generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts (more efficient)"""
+        if not self.embedding_enabled:
+            logger.debug("Embeddings disabled, returning dummy embeddings")
+            # Return dummy embeddings for all texts
+            return [[0.0] * self.embedding_dimensions for _ in texts]
+            
         if self.session is None:
             await self.initialize()
             
         try:
-            # Clean texts
-            clean_texts = [text.strip() for text in texts if text.strip()]
-            if not clean_texts:
-                return []
+            # Build map of indices to cleaned texts
+            cleaned = [(i, t.strip()) for i, t in enumerate(texts)]
+            payload = [t for _, t in cleaned]
+            
+            # If you want strict behavior, raise for any empty item
+            if any(not t for t in payload):
+                raise ValueError("All texts must be non-empty strings")
                 
-            # Call model service embedding endpoint
-            async with self.session.post(
+            # Call model service embedding endpoint with retry logic
+            result = await self._post_with_retries(
                 f"{self.model_service_url}/embeddings",
-                json={"texts": clean_texts},
-                headers={"Content-Type": "application/json"}
-            ) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise Exception(f"Model service error {response.status}: {error_text}")
+                {"texts": payload},
+                {"Content-Type": "application/json"}
+            )
+            
+            embeddings = result.get("embeddings", [])
+            if len(embeddings) != len(payload):
+                raise Exception(f"Expected {len(payload)} embeddings, got {len(embeddings)}")
                 
-                result = await response.json()
-                embeddings = result.get("embeddings", [])
-                if len(embeddings) != len(clean_texts):
-                    raise Exception(f"Expected {len(clean_texts)} embeddings, got {len(embeddings)}")
-                    
-                return embeddings
+            return embeddings
             
         except Exception as e:
             logger.error(f"Failed to generate batch embeddings: {e}")

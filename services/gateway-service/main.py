@@ -52,18 +52,21 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS middleware
+# CORS (configure allowed origins for prod)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Add rate limiting middleware
-from src.rate_limiter import rate_limit_middleware
-app.middleware("http")(rate_limit_middleware)
+# Attach rate-limiter if available
+try:
+    from src.rate_limiter import rate_limit_middleware
+    app.middleware("http")(rate_limit_middleware)
+except Exception:
+    logger.warning("Rate limiter middleware not attached")
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Verify JWT token and get current user"""
@@ -147,22 +150,45 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
 # Model Service Routes
 @app.post("/model/generate")
 async def model_generate(
-    request: Dict[str, Any],
-    current_user: dict = Depends(get_current_user)
+    request: Dict[str, Any]
 ):
     """Proxy to model service for text generation"""
+    # Handle streaming requests
+    if request.get("stream"):
+        import json
+        from fastapi.responses import StreamingResponse
+        
+        async def generate_stream():
+            try:
+                # Proxy streaming request to model service
+                async for chunk in service_router.proxy_stream_request(
+                    "model-service",
+                    "POST", 
+                    "/generate",
+                    json=request
+                ):
+                    # Forward streaming chunks
+                    yield chunk
+            except asyncio.CancelledError:
+                logger.info("Client disconnected from SSE stream")
+                raise
+            # Send completion signal
+            completion_data = json.dumps({"done": True})
+            yield f"data: {completion_data}\n\n"
+        
+        return StreamingResponse(generate_stream(), media_type="text/event-stream")
+    
+    # Non-streaming request
     return await service_router.proxy_request(
         "model-service",
         "POST",
         "/generate",
-        json=request,
-        headers={"user-id": current_user.get("user_id")}
+        json=request
     )
 
 @app.post("/model/load-model")
 async def model_load(
-    request: Dict[str, Any],
-    current_user: dict = Depends(get_current_user)
+    request: Dict[str, Any]
 ):
     """Proxy to model service for model loading"""
     return await service_router.proxy_request(

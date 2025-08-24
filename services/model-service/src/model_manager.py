@@ -1,6 +1,7 @@
 import asyncio
+import os
 import psutil
-from typing import AsyncGenerator, Optional, Dict, Any
+from typing import AsyncGenerator, Optional, Dict, Any, List
 from enum import Enum
 import logging
 from contextlib import asynccontextmanager
@@ -8,6 +9,12 @@ import gc
 import json
 
 logger = logging.getLogger(__name__)
+
+# Import state machine
+try:
+    from .state_machine import ModelStateMachine, ModelState
+except ImportError:
+    from state_machine import ModelStateMachine, ModelState
 
 # Optional imports with fallbacks
 try:
@@ -26,13 +33,7 @@ except ImportError:
     logger.warning("GPUtil not available - continuing without GPU monitoring")
     GPUtil = None
 
-class ModelState(Enum):
-    IDLE = "idle"
-    LOADING = "loading"
-    LOADED = "loaded"
-    GENERATING = "generating"
-    UNLOADING = "unloading"
-    ERROR = "error"
+# ModelState is now imported from state_machine
 
 class ModelManager:
     """Manages GPU model loading, unloading, and hot-swapping"""
@@ -46,14 +47,22 @@ class ModelManager:
         self.current_model = None
         self.current_wrapper = None
         self.current_model_type = None
-        self.state: ModelState = ModelState.IDLE
         
-        # Platform detection
+        # Initialize state machine
+        self.state_machine = ModelStateMachine()
+        
+        # Concurrency control
+        self._gen_lock = asyncio.Lock()
+        self._load_lock = asyncio.Lock()
+        
+        # Platform detection and backend configuration
         import platform
         self.is_windows = platform.system() == "Windows"
+        self.backend = os.getenv("BACKEND", "vulkan" if self.is_windows else "cuda").lower()
+        
+        logger.info(f"Platform: {'Windows' if self.is_windows else 'Linux/Docker'}, Backend: {self.backend}")
         
         # Get model configurations from environment variables
-        import os
         from pathlib import Path
         
         # Auto-detect models path based on platform
@@ -146,77 +155,92 @@ class ModelManager:
                 except Exception as e:
                     if self.is_windows:
                         logger.warning(f"Redis not available (Windows native mode): {e}")
+                        if self.redis_client:
+                            try:
+                                await self.redis_client.aclose()
+                            except Exception:
+                                pass
                         self.redis_client = None
                     else:
+                        if self.redis_client:
+                            try:
+                                await self.redis_client.aclose()
+                            except Exception:
+                                pass
                         raise  # Redis required in Docker mode
             else:
                 logger.warning("Redis not available - continuing without Redis support")
                 self.redis_client = None
             
-            # Platform-specific GPU detection
-            if self.is_windows:
-                await self._check_windows_gpu()
+            # Backend-specific GPU detection
+            if self.backend == "vulkan":
+                await self._check_vulkan_gpu()
+            elif self.backend == "rocm":
+                await self._check_rocm_gpu()
+            elif self.backend == "cuda":
+                await self._check_cuda_gpu()
             else:
-                await self._check_linux_gpu()
+                logger.warning(f"Unknown backend '{self.backend}', skipping GPU detection")
             
             await self._update_status()
             logger.info("ModelManager initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize ModelManager: {e}")
-            self.state = ModelState.ERROR
+            await self.state_machine.handle_error(e)
             raise
             
     async def load_model(self, model_type: str) -> bool:
         """Hot-swap to specified model (chat/summary)"""
-        try:
-            if model_type not in self.model_configs:
-                raise ValueError(f"Unknown model type: {model_type}")
+        async with self._load_lock:
+            try:
+                if model_type not in self.model_configs:
+                    raise ValueError(f"Unknown model type: {model_type}")
+                    
+                # If already loaded with same type, return
+                if self.current_model_type == model_type and self.state_machine.get_current_state() == ModelState.LOADED:
+                    logger.info(f"Model {model_type} already loaded")
+                    return True
+                    
+                # Unload current model if different type
+                if self.current_model and self.current_model_type != model_type:
+                    await self.unload_current_model()
+                    
+                await self.state_machine.transition(ModelState.LOADING)
+                await self._update_status()
+            
+                config = self.model_configs[model_type]
                 
-            # If already loaded with same type, return
-            if self.current_model_type == model_type and self.state == ModelState.LOADED:
-                logger.info(f"Model {model_type} already loaded")
+                # Check memory requirements
+                try:
+                    from .memory_monitor import MemoryMonitor
+                except ImportError:
+                    from memory_monitor import MemoryMonitor
+                monitor = MemoryMonitor()
+                if not await monitor.can_load_model(model_type):
+                    logger.error(f"Insufficient memory for {model_type} model")
+                    await self.state_machine.handle_error(Exception(f"Insufficient memory for {model_type} model"))
+                    return False
+                    
+                # Load model using llama wrapper
+                try:
+                    from .llama_wrapper import LlamaWrapper
+                except ImportError:
+                    from llama_wrapper import LlamaWrapper
+                self.current_wrapper = LlamaWrapper()
+                self.current_model = self.current_wrapper.load_model(config["path"], config)
+                self.current_model_type = model_type
+                await self.state_machine.transition(ModelState.LOADED)
+                
+                await self._update_status()
+                logger.info(f"Successfully loaded {model_type} model")
                 return True
                 
-            # Unload current model if different type
-            if self.current_model and self.current_model_type != model_type:
-                await self.unload_current_model()
-                
-            self.state = ModelState.LOADING
-            await self._update_status()
-            
-            config = self.model_configs[model_type]
-            
-            # Check memory requirements
-            try:
-                from .memory_monitor import MemoryMonitor
-            except ImportError:
-                from memory_monitor import MemoryMonitor
-            monitor = MemoryMonitor()
-            if not await monitor.can_load_model(model_type):
-                logger.error(f"Insufficient memory for {model_type} model")
-                self.state = ModelState.ERROR
+            except Exception as e:
+                logger.error(f"Failed to load {model_type} model: {e}")
+                await self.state_machine.handle_error(e)
+                await self._update_status()
                 return False
-                
-            # Load model using llama wrapper
-            try:
-                from .llama_wrapper import LlamaWrapper
-            except ImportError:
-                from llama_wrapper import LlamaWrapper
-            self.current_wrapper = LlamaWrapper()
-            self.current_model = self.current_wrapper.load_model(config["path"], config)
-            self.current_model_type = model_type
-            self.state = ModelState.LOADED
-            
-            await self._update_status()
-            logger.info(f"Successfully loaded {model_type} model")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to load {model_type} model: {e}")
-            self.state = ModelState.ERROR
-            await self._update_status()
-            return False
             
     async def unload_current_model(self):
         """Free VRAM and cleanup current model"""
@@ -224,7 +248,7 @@ class ModelManager:
             if not self.current_model:
                 return
                 
-            self.state = ModelState.UNLOADING
+            await self.state_machine.transition(ModelState.UNLOADING)
             await self._update_status()
             
             # Cleanup model and wrapper
@@ -238,64 +262,75 @@ class ModelManager:
             gc.collect()
             # PyTorch CUDA cache clearing not needed for GGUF models
                 
-            self.state = ModelState.IDLE
+            await self.state_machine.transition(ModelState.IDLE)
             await self._update_status()
             logger.info("Model unloaded successfully")
             
         except Exception as e:
             logger.error(f"Error unloading model: {e}")
-            self.state = ModelState.ERROR
+            await self.state_machine.handle_error(e)
             
     async def generate_stream(self, prompt: str, params: dict) -> AsyncGenerator[str, None]:
         """Stream tokens from current model"""
-        if not self.current_model or self.state != ModelState.LOADED:
-            raise RuntimeError("No model loaded")
-            
-        try:
-            self.state = ModelState.GENERATING
-            await self._update_status()
-            
-            async for token in self.current_wrapper.generate_tokens(prompt, **params):
-                yield token
+        async with self._gen_lock:
+            if not self.current_model or self.state_machine.get_current_state() != ModelState.LOADED:
+                raise RuntimeError("No model loaded")
                 
-        finally:
-            self.state = ModelState.LOADED
-            await self._update_status()
+            try:
+                await self.state_machine.transition(ModelState.GENERATING)
+                await self._update_status()
+                
+                async for token in self.current_wrapper.generate_tokens(prompt, **params):
+                    yield token
+                    
+            finally:
+                await self.state_machine.transition(ModelState.LOADED)
+                await self._update_status()
             
     async def generate_completion(self, prompt: str, params: dict) -> str:
         """Generate complete response (for summaries)"""
-        if not self.current_model or self.state != ModelState.LOADED:
-            raise RuntimeError("No model loaded")
-            
-        try:
-            self.state = ModelState.GENERATING
-            await self._update_status()
-            
-            tokens = []
-            async for token in self.current_wrapper.generate_tokens(prompt, **params):
-                tokens.append(token)
+        async with self._gen_lock:
+            if not self.current_model or self.state_machine.get_current_state() != ModelState.LOADED:
+                raise RuntimeError("No model loaded")
                 
-            return "".join(tokens)
-            
-        finally:
-            self.state = ModelState.LOADED
-            await self._update_status()
+            try:
+                await self.state_machine.transition(ModelState.GENERATING)
+                await self._update_status()
+                
+                tokens = []
+                async for token in self.current_wrapper.generate_tokens(prompt, **params):
+                    tokens.append(token)
+                    
+                return "".join(tokens)
+                
+            finally:
+                await self.state_machine.transition(ModelState.LOADED)
+                await self._update_status()
             
     async def get_model_status(self) -> dict:
         """Return current model state, type, and memory usage"""
         try:
             base_status = {
-                "state": self.state.value,
+                "state": self.state_machine.get_current_state().value,
                 "current_model_type": self.current_model_type,
                 "current_model": self.current_model is not None,
-                "platform": "windows-rocm" if self.is_windows else "linux-docker",
+                "platform": "windows" if self.is_windows else "linux",
+                "backend": self.backend,
                 "models_path": str(self.models_path),
                 "available_models": list(self.model_configs.keys()),
-                "timestamp": asyncio.get_event_loop().time()
+                "timestamp": asyncio.get_event_loop().time(),
+                "state_machine_stats": self.state_machine.get_stats()
             }
             
             # Add GPU info
             base_status["gpu_info"] = self.get_gpu_info()
+            
+            # Add model metadata if available
+            if self.current_wrapper:
+                try:
+                    base_status["model_info"] = self.current_wrapper.get_model_info()
+                except Exception:
+                    pass
             
             # Add memory stats if monitor is available
             try:
@@ -314,9 +349,10 @@ class ModelManager:
         except Exception as e:
             logger.error(f"Error getting status: {e}")
             return {
-                "state": self.state.value,
+                "state": self.state_machine.get_current_state().value,
                 "current_model_type": self.current_model_type,
-                "platform": "windows-rocm" if self.is_windows else "linux-docker",
+                "platform": "windows" if self.is_windows else "linux",
+                "backend": self.backend,
                 "error": str(e)
             }
             
@@ -330,37 +366,90 @@ class ModelManager:
                 self.current_wrapper = None
             self.current_model = None
             self.current_model_type = None
+            
+            # Clean up Redis connection
+            if self.redis_client:
+                try:
+                    await self.redis_client.aclose()
+                    logger.debug("Redis connection closed")
+                except Exception as redis_error:
+                    logger.debug(f"Error closing Redis connection: {redis_error}")
+                finally:
+                    self.redis_client = None
                 
             gc.collect()
             # PyTorch CUDA operations not needed for GGUF models
                 
-            self.state = ModelState.IDLE
+            await self.state_machine.transition(ModelState.IDLE)
             await self._update_status()
             logger.info("Emergency shutdown completed")
             
         except Exception as e:
             logger.error(f"Error during emergency shutdown: {e}")
-            self.state = ModelState.ERROR
+            await self.state_machine.handle_error(e)
             
-    async def _check_windows_gpu(self):
-        """Windows-specific GPU detection with ROCm support"""
+    async def _check_vulkan_gpu(self):
+        """Vulkan backend GPU detection"""
         try:
-            # Check for AMD ROCm GPU - try multiple HIP SDK versions
+            logger.info("Checking Vulkan GPU availability...")
+            
+            # Check if Vulkan SDK is available
+            import subprocess
+            try:
+                # Safe subprocess call with timeout and error handling
+                result = subprocess.run(["vulkaninfo", "--summary"], 
+                                      capture_output=True, text=True, timeout=15,
+                                      creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                if result.returncode == 0:
+                    vulkan_output = result.stdout
+                    # Look for device info in vulkaninfo output
+                    lines = vulkan_output.split('\n')
+                    device_count = 0
+                    for line in lines:
+                        if "deviceName" in line:
+                            device_count += 1
+                            device_name = line.split('=')[-1].strip()
+                            logger.info(f"✅ Vulkan Device: {device_name}")
+                    
+                    if device_count > 0:
+                        logger.info(f"✅ Vulkan backend ready with {device_count} device(s)")
+                        logger.info("🔥 All model layers will be offloaded to GPU via Vulkan")
+                    else:
+                        logger.warning("Vulkan runtime available but no devices found")
+                else:
+                    logger.warning("vulkaninfo failed - Vulkan may not be properly installed")
+                    
+            except FileNotFoundError:
+                logger.warning("vulkaninfo not found - install Vulkan SDK for verification")
+            except Exception as e:
+                logger.warning(f"Vulkan check failed: {e}")
+                
+        except Exception as e:
+            logger.warning(f"Vulkan GPU detection error: {e}")
+            
+    async def _check_rocm_gpu(self):
+        """ROCm backend GPU detection"""
+        try:
+            logger.info("Checking ROCm GPU availability...")
+            
             import subprocess
             hip_versions = ["6.4", "6.3", "6.2", "6.1", "6.0", "5.7"]
             rocm_found = False
             
             for version in hip_versions:
-                hipinfo_path = rf"C:\Program Files\AMD\ROCm\{version}\bin\hipInfo.exe"
+                hipinfo_path = rf"C:\Program Files\AMD\ROCm\{version}\bin\hipInfo.exe" if self.is_windows else "hipInfo"
                 try:
+                    # Validate path exists before running
+                    if self.is_windows and not os.path.exists(hipinfo_path):
+                        continue
                     result = subprocess.run([hipinfo_path], 
-                                          capture_output=True, text=True, timeout=10)
+                                          capture_output=True, text=True, timeout=10,
+                                          creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
                     if result.returncode == 0:
                         rocm_found = True
                         gpu_output = result.stdout
                         if any(gpu_name in gpu_output for gpu_name in ["7900", "RX 7", "RDNA3"]):
                             logger.info(f"✅ AMD RDNA3 GPU detected with ROCm {version}")
-                            logger.info("🔥 All model layers will be offloaded to GPU")
                         else:
                             logger.info(f"✅ AMD GPU detected with ROCm {version}")
                         break
@@ -371,140 +460,63 @@ class ModelManager:
                     continue
             
             if not rocm_found:
-                # Fallback: check if HIP is in PATH
-                try:
-                    result = subprocess.run(["hipInfo"], 
-                                          capture_output=True, text=True, timeout=10)
-                    if result.returncode == 0:
-                        logger.info("✅ AMD GPU detected with ROCm (via PATH)")
-                        rocm_found = True
-                except:
-                    pass
-                    
-            if not rocm_found:
-                logger.warning("ROCm not found - will use CPU-only inference")
+                logger.warning("ROCm not found - install ROCm for AMD GPU acceleration")
                 
         except Exception as e:
-            logger.warning(f"GPU detection error: {e}")
+            logger.warning(f"ROCm GPU detection error: {e}")
             
-        # Fallback to GPUtil for additional info
-        if GPUTIL_AVAILABLE:
-            try:
-                gpus = GPUtil.getGPUs()
-                if gpus:
-                    for i, gpu in enumerate(gpus):
-                        logger.info(f"GPU {i}: {gpu.name}, Memory: {gpu.memoryTotal}MB")
-                else:
-                    logger.warning("No GPUs detected via GPUtil")
-            except Exception as e:
-                logger.warning(f"GPUtil detection failed: {e}")
-        else:
-            logger.warning("GPUtil not available - skipping GPU detection")
+    async def _check_cuda_gpu(self):
+        """CUDA backend GPU detection"""
+        try:
+            logger.info("Checking CUDA GPU availability...")
             
-    async def _check_linux_gpu(self):
-        """Linux/Docker GPU detection"""
-        if GPUTIL_AVAILABLE:
-            try:
-                gpus = GPUtil.getGPUs()
-                if not gpus:
-                    logger.warning("No GPUs detected")
-                else:
-                    logger.info(f"Found {len(gpus)} GPU(s)")
-                    for i, gpu in enumerate(gpus):
-                        logger.info(f"GPU {i}: {gpu.name}, Memory: {gpu.memoryTotal}MB")
-            except Exception as e:
-                logger.warning(f"GPU detection failed: {e}")
-        else:
-            logger.warning("GPUtil not available - skipping GPU detection")
+            if GPUTIL_AVAILABLE:
+                try:
+                    gpus = GPUtil.getGPUs()
+                    if not gpus:
+                        logger.warning("No CUDA GPUs detected")
+                    else:
+                        logger.info(f"✅ Found {len(gpus)} CUDA GPU(s)")
+                        for i, gpu in enumerate(gpus):
+                            logger.info(f"GPU {i}: {gpu.name}, Memory: {gpu.memoryTotal}MB")
+                except Exception as e:
+                    logger.warning(f"CUDA GPU detection failed: {e}")
+            else:
+                logger.warning("GPUtil not available - install GPUtil for CUDA detection")
+                
+        except Exception as e:
+            logger.warning(f"CUDA GPU detection error: {e}")
             
     def get_gpu_info(self) -> dict:
         """Get GPU information for status endpoint"""
-        if self.is_windows:
-            return self._get_windows_gpu_info()
-        else:
-            return self._get_linux_gpu_info()
-            
-    def _get_windows_gpu_info(self) -> dict:
-        """Windows-specific GPU info with ROCm detection"""
+        return {
+            "platform": "windows" if self.is_windows else "linux",
+            "backend": self.backend,
+            "backend_available": self._check_backend_available(),
+            "timestamp": asyncio.get_event_loop().time()
+        }
+        
+    def _check_backend_available(self) -> bool:
+        """Quick check if the configured backend is available"""
         try:
-            import subprocess
-            hip_versions = ["6.4", "6.3", "6.2", "6.1", "6.0", "5.7"]
-            
-            for version in hip_versions:
-                hipinfo_path = rf"C:\Program Files\AMD\ROCm\{version}\bin\hipInfo.exe"
-                try:
-                    result = subprocess.run([hipinfo_path], 
-                                          capture_output=True, text=True, timeout=10)
-                    if result.returncode == 0:
-                        gpu_output = result.stdout
-                        if any(gpu_name in gpu_output for gpu_name in ["7900", "RX 7", "RDNA3"]):
-                            return {
-                                "platform": "windows-rocm",
-                                "rocm_available": True,
-                                "rocm_version": version,
-                                "gpu_detected": "AMD RDNA3 GPU",
-                                "output": gpu_output[:300],
-                                "gpu_offload": "All layers (-1)"
-                            }
-                        else:
-                            return {
-                                "platform": "windows-rocm",
-                                "rocm_available": True,
-                                "rocm_version": version,
-                                "gpu_detected": "AMD GPU found",
-                                "output": gpu_output[:300],
-                                "gpu_offload": "All layers (-1)"
-                            }
-                except FileNotFoundError:
-                    continue
-                except Exception:
-                    continue
-            
-            # Check PATH fallback
-            try:
+            if self.backend == "vulkan":
+                import subprocess
+                result = subprocess.run(["vulkaninfo", "--summary"], 
+                                      capture_output=True, timeout=5,
+                                      creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                return result.returncode == 0
+            elif self.backend == "rocm":
+                import subprocess
                 result = subprocess.run(["hipInfo"], 
-                                      capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    return {
-                        "platform": "windows-rocm",
-                        "rocm_available": True,
-                        "rocm_version": "PATH",
-                        "gpu_detected": "AMD GPU found (via PATH)",
-                        "output": result.stdout[:300],
-                        "gpu_offload": "All layers (-1)"
-                    }
-            except:
-                pass
-                
-            return {
-                "platform": "windows",
-                "rocm_available": False,
-                "reason": "ROCm not found in standard paths"
-            }
-        except Exception as e:
-            return {
-                "platform": "windows",
-                "rocm_available": False,
-                "reason": str(e)
-            }
-            
-    def _get_linux_gpu_info(self) -> dict:
-        """Linux/Docker GPU info"""
-        if GPUTIL_AVAILABLE:
-            try:
-                gpus = GPUtil.getGPUs()
-                if gpus:
-                    return {
-                        "platform": "linux-docker",
-                        "gpu_count": len(gpus),
-                        "gpus": [{"name": gpu.name, "memory": f"{gpu.memoryTotal}MB"} for gpu in gpus]
-                    }
-                else:
-                    return {"platform": "linux-docker", "gpu_count": 0, "gpus": []}
-            except Exception as e:
-                return {"platform": "linux-docker", "error": str(e)}
-        else:
-            return {"platform": "linux-docker", "error": "GPUtil not available"}
+                                      capture_output=True, timeout=5,
+                                      creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                return result.returncode == 0
+            elif self.backend == "cuda":
+                return GPUTIL_AVAILABLE
+            else:
+                return False
+        except:
+            return False
             
     async def monitor_vram(self) -> dict:
         """Real-time VRAM monitoring"""
@@ -566,7 +578,7 @@ class ModelManager:
             logger.error(f"Failed to load embedding model: {e}")
             return False
             
-    async def generate_embeddings(self, texts: list[str]) -> list[list[float]]:
+    async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for a list of texts"""
         try:
             if not self.current_embedding_model:
@@ -576,7 +588,7 @@ class ModelManager:
             embeddings = []
             for text in texts:
                 # Create embeddings using llama.cpp
-                embedding = self.current_embedding_model.create_embedding(text)
+                embedding = self.current_embedding_model.create_embedding(input=text)
                 embeddings.append(embedding["data"][0]["embedding"])
                 
             logger.info(f"Generated embeddings for {len(texts)} texts")

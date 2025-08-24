@@ -1,9 +1,6 @@
-import asyncio
-import json
-import logging
+import asyncio, json, logging, os, re
 from typing import List, Dict, Any, Optional
 import aiohttp
-import re
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -11,8 +8,9 @@ logger = logging.getLogger(__name__)
 class ChangeExtractor:
     """Extract potential Life Strand changes from conversations"""
     
-    def __init__(self, model_service_url: str = "http://host.docker.internal:8001"):
+    def __init__(self, model_service_url: str = "http://host.docker.internal:8001", npc_service_url: Optional[str] = None):
         self.model_service_url = model_service_url
+        self.npc_service_url = npc_service_url or os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
         self.confidence_threshold = 0.6
     
     async def initialize(self):
@@ -537,7 +535,8 @@ Rate the overall emotional impact:
         """Get NPC data from NPC service"""
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"http://localhost:8003/npcs/{npc_id}") as response:
+                async with session.get(f"{self.npc_service_url}/npcs/{npc_id}",
+                                       timeout=aiohttp.ClientTimeout(total=5)) as response:
                     if response.status == 200:
                         return await response.json()
                         

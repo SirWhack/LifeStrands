@@ -18,10 +18,9 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 try:
-    import nvidia_ml_py3 as nvml
-    nvml.nvmlInit()
+    import pynvml as nvml
     NVML_AVAILABLE = True
-except ImportError:
+except Exception:
     NVML_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -36,6 +35,13 @@ class MemoryMonitor:
         }
         self.safety_margin = 1000  # MB safety margin
         self.is_windows = platform.system() == "Windows"
+        
+        # Configure backend and minimum VRAM threshold
+        import os
+        self.backend = os.getenv("BACKEND", "vulkan" if self.is_windows else "cuda").lower()
+        self.min_vram_mb = int(os.getenv("MIN_VRAM_MB", "12000"))  # 12GB minimum
+        
+        logger.info(f"MemoryMonitor initialized: backend={self.backend}, min_vram={self.min_vram_mb}MB")
         
     async def get_gpu_stats(self) -> Dict[str, Any]:
         """Current GPU usage, temperature, and availability"""
@@ -54,52 +60,72 @@ class MemoryMonitor:
             
             # Try NVML second (for NVIDIA GPUs)
             if NVML_AVAILABLE:
+                nvml_initialized = False
                 try:
-                    device_count = nvml.nvmlDeviceGetCount()
-                    stats["available"] = device_count > 0
-                    stats["count"] = device_count
-                    
-                    for i in range(device_count):
-                        handle = nvml.nvmlDeviceGetHandleByIndex(i)
-                        name = nvml.nvmlDeviceGetName(handle).decode('utf-8')
+                    # Initialize NVML
+                    try:
+                        nvml.nvmlInit()
+                        nvml_initialized = True
+                    except Exception as init_error:
+                        logger.debug(f"NVML initialization failed: {init_error}")
                         
-                        # Memory info
-                        mem_info = nvml.nvmlDeviceGetMemoryInfo(handle)
-                        memory_total = mem_info.total // 1024 // 1024  # Convert to MB
-                        memory_used = mem_info.used // 1024 // 1024
-                        memory_free = mem_info.free // 1024 // 1024
+                    if nvml_initialized:
+                        device_count = nvml.nvmlDeviceGetCount()
+                        stats["available"] = device_count > 0
+                        stats["count"] = device_count
                         
-                        # Temperature
-                        try:
-                            temp = nvml.nvmlDeviceGetTemperature(handle, nvml.NVML_TEMPERATURE_GPU)
-                        except:
-                            temp = None
-                            
-                        # Utilization
-                        try:
-                            util = nvml.nvmlDeviceGetUtilizationRates(handle)
-                            gpu_util = util.gpu
-                            mem_util = util.memory
-                        except:
-                            gpu_util = None
-                            mem_util = None
-                            
-                        device_stats = {
-                            "index": i,
-                            "name": name,
-                            "memory_total_mb": memory_total,
-                            "memory_used_mb": memory_used,
-                            "memory_free_mb": memory_free,
-                            "memory_utilization_percent": (memory_used / memory_total * 100) if memory_total > 0 else 0,
-                            "temperature_c": temp,
-                            "gpu_utilization_percent": gpu_util,
-                            "memory_bandwidth_utilization_percent": mem_util
-                        }
-                        
-                        stats["devices"].append(device_stats)
+                        for i in range(device_count):
+                            try:
+                                handle = nvml.nvmlDeviceGetHandleByIndex(i)
+                                name = nvml.nvmlDeviceGetName(handle).decode('utf-8')
+                                
+                                # Memory info
+                                mem_info = nvml.nvmlDeviceGetMemoryInfo(handle)
+                                memory_total = mem_info.total // 1024 // 1024  # Convert to MB
+                                memory_used = mem_info.used // 1024 // 1024
+                                memory_free = mem_info.free // 1024 // 1024
+                                
+                                # Temperature
+                                try:
+                                    temp = nvml.nvmlDeviceGetTemperature(handle, nvml.NVML_TEMPERATURE_GPU)
+                                except Exception:
+                                    temp = None
+                                    
+                                # Utilization
+                                try:
+                                    util = nvml.nvmlDeviceGetUtilizationRates(handle)
+                                    gpu_util = util.gpu
+                                    mem_util = util.memory
+                                except Exception:
+                                    gpu_util = None
+                                    mem_util = None
+                                    
+                                device_stats = {
+                                    "index": i,
+                                    "name": name,
+                                    "memory_total_mb": memory_total,
+                                    "memory_used_mb": memory_used,
+                                    "memory_free_mb": memory_free,
+                                    "memory_utilization_percent": (memory_used / memory_total * 100) if memory_total > 0 else 0,
+                                    "temperature_c": temp,
+                                    "gpu_utilization_percent": gpu_util,
+                                    "memory_bandwidth_utilization_percent": mem_util
+                                }
+                                
+                                stats["devices"].append(device_stats)
+                            except Exception as device_error:
+                                logger.debug(f"Error reading GPU {i}: {device_error}")
+                                continue
                         
                 except Exception as e:
                     logger.debug(f"NVML error: {e}")
+                finally:
+                    # Always try to shutdown NVML if it was initialized
+                    if nvml_initialized:
+                        try:
+                            nvml.nvmlShutdown()
+                        except Exception as shutdown_error:
+                            logger.debug(f"NVML shutdown error: {shutdown_error}")
                     
             # Fallback to GPUtil
             elif GPU_UTIL_AVAILABLE:
@@ -222,16 +248,26 @@ class MemoryMonitor:
     async def can_load_model(self, model_type: str) -> bool:
         """Check if sufficient memory available"""
         try:
-            # Windows ROCm bypass - assume GPU is available if Windows platform
-            if self.is_windows:
-                logger.info(f"Windows ROCm mode: Allowing {model_type} model loading (GPU memory check bypassed)")
-                return True
-                
             required_memory = await self.predict_memory_requirement(model_type)
+            
+            # For Vulkan backend on Windows, use conservative threshold approach
+            if self.backend == "vulkan":
+                if self.min_vram_mb >= required_memory:
+                    logger.info(f"Vulkan backend: Assuming sufficient VRAM ({self.min_vram_mb}MB >= {required_memory}MB)")
+                    return True
+                else:
+                    logger.error(f"Vulkan backend: Configured VRAM ({self.min_vram_mb}MB) below requirement ({required_memory}MB)")
+                    return False
+            
+            # For CUDA/ROCm backends, try to get actual GPU stats
             gpu_stats = await self.get_gpu_stats()
             
             if not gpu_stats.get("available", False):
-                logger.warning("No GPU available")
+                logger.warning("No GPU available for CUDA/ROCm backend")
+                # Fallback to threshold check
+                if self.min_vram_mb >= required_memory:
+                    logger.warning(f"Fallback: Using minimum VRAM threshold ({self.min_vram_mb}MB >= {required_memory}MB)")
+                    return True
                 return False
                 
             # Check if any GPU has enough free memory
@@ -246,6 +282,10 @@ class MemoryMonitor:
             
         except Exception as e:
             logger.error(f"Error checking if can load model: {e}")
+            # Fallback to threshold in case of error
+            if self.min_vram_mb >= await self.predict_memory_requirement(model_type):
+                logger.warning(f"Error fallback: Using minimum VRAM threshold")
+                return True
             return False
             
     async def trigger_cleanup(self):
@@ -284,13 +324,22 @@ class MemoryMonitor:
         """Update memory estimates based on actual usage"""
         try:
             if model_type in self.model_memory_estimates:
+                # Validate actual_usage is reasonable (between 100MB and 100GB)
+                if not (100 <= actual_usage <= 100000):
+                    logger.warning(f"Ignoring unrealistic memory usage report: {actual_usage}MB for {model_type}")
+                    return
+                
                 # Use exponential moving average to update estimate
                 alpha = 0.3
                 old_estimate = self.model_memory_estimates[model_type]
                 new_estimate = alpha * actual_usage + (1 - alpha) * old_estimate
-                self.model_memory_estimates[model_type] = int(new_estimate)
                 
-                logger.info(f"Updated memory estimate for {model_type}: {old_estimate}MB -> {new_estimate:.0f}MB")
+                # Ensure the new estimate stays within reasonable bounds (100MB to 50GB)
+                new_estimate = max(100, min(50000, int(new_estimate)))
+                
+                self.model_memory_estimates[model_type] = new_estimate
+                
+                logger.info(f"Updated memory estimate for {model_type}: {old_estimate}MB -> {new_estimate}MB")
                 
         except Exception as e:
             logger.error(f"Error updating memory estimates: {e}")
@@ -327,16 +376,25 @@ class MemoryMonitor:
         try:
             import subprocess
             import json
+            import shlex
+            import os.path
             
-            # Try different ROCm versions
+            # Try different ROCm versions with path validation
             hip_versions = ["6.4", "6.3", "6.2", "6.1", "6.0", "5.7"]
             
             for version in hip_versions:
                 rocm_smi_path = rf"C:\Program Files\AMD\ROCm\{version}\bin\rocm-smi.exe"
+                
+                # Validate the executable path exists and is a file
+                if not os.path.isfile(rocm_smi_path):
+                    continue
+                    
                 try:
-                    # Get memory info in JSON format
-                    result = subprocess.run([rocm_smi_path, "--showmeminfo", "vram", "--json"], 
-                                          capture_output=True, text=True, timeout=10)
+                    # Use safe command construction
+                    cmd = [rocm_smi_path, "--showmeminfo", "vram", "--json"]
+                    result = subprocess.run(cmd, 
+                                          capture_output=True, text=True, timeout=10,
+                                          creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
                     if result.returncode == 0:
                         data = json.loads(result.stdout)
                         devices = []
@@ -344,7 +402,7 @@ class MemoryMonitor:
                         # Parse AMD GPU memory info
                         if isinstance(data, dict):
                             for device_id, device_info in data.items():
-                                if device_id.startswith("card"):
+                                if isinstance(device_id, str) and device_id.startswith("card"):
                                     memory_info = device_info.get("Memory Info", {})
                                     vram_total = memory_info.get("VRAM Total Memory (B)", 0)
                                     vram_used = memory_info.get("VRAM Total Used Memory (B)", 0)
@@ -381,16 +439,23 @@ class MemoryMonitor:
                     logger.debug(f"ROCm {version} SMI failed: {e}")
                     continue
             
-            # Fallback: try rocm-smi in PATH
+            # Fallback: try rocm-smi in PATH with proper validation
             try:
-                result = subprocess.run(["rocm-smi", "--showmeminfo", "vram", "--json"], 
-                                      capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    data = json.loads(result.stdout)
-                    # Similar parsing logic as above
-                    logger.info("AMD GPU detected via PATH rocm-smi")
-                    return {"available": True, "count": 1, "devices": [], "backend": "ROCm PATH"}
-            except:
+                # Use which/where to find the command safely
+                which_cmd = "where" if os.name == "nt" else "which"
+                which_result = subprocess.run([which_cmd, "rocm-smi"], 
+                                            capture_output=True, text=True, timeout=5)
+                if which_result.returncode == 0:
+                    cmd = ["rocm-smi", "--showmeminfo", "vram", "--json"]
+                    result = subprocess.run(cmd, 
+                                          capture_output=True, text=True, timeout=10,
+                                          creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                    if result.returncode == 0:
+                        data = json.loads(result.stdout)
+                        # Similar parsing logic as above
+                        logger.info("AMD GPU detected via PATH rocm-smi")
+                        return {"available": True, "count": 1, "devices": [], "backend": "ROCm PATH"}
+            except Exception:
                 pass
                 
             return {"available": False, "reason": "AMD ROCm SMI not available"}

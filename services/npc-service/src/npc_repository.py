@@ -3,8 +3,9 @@ import asyncpg
 import json
 import logging
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,7 @@ class NPCRepository:
     def __init__(self, database_url: str = None):
         self.database_url = database_url or "postgresql://user:pass@localhost/lifestrands"
         self.pool: Optional[asyncpg.Pool] = None
+        self.embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "384"))
         
     async def initialize(self):
         """Initialize database connection pool"""
@@ -25,9 +27,49 @@ class NPCRepository:
                 command_timeout=60
             )
             
-            # Test connection
+            # Test connection and ensure pgvector setup
             async with self.pool.acquire() as conn:
                 await conn.fetchval("SELECT 1")
+                # Ensure pgvector extension exists
+                await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                
+                # Create npcs table if it doesn't exist
+                await conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS npcs (
+                        id UUID PRIMARY KEY,
+                        name TEXT,
+                        location TEXT,
+                        faction TEXT,
+                        status TEXT DEFAULT 'active',
+                        background_occupation TEXT,
+                        background_age INT,
+                        personality_traits JSONB,
+                        life_strand_data JSONB NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        embedding vector({self.embedding_dimensions})
+                    )
+                """)
+                
+                # Add embedding column if it doesn't exist (for older tables)
+                await conn.execute(f"""
+                    ALTER TABLE npcs
+                    ADD COLUMN IF NOT EXISTS embedding vector({self.embedding_dimensions})
+                """)
+                
+                # Create indexes for performance optimization
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_npcs_status ON npcs(status)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_npcs_location ON npcs(location) WHERE status <> 'archived'")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_npcs_faction ON npcs(faction) WHERE status <> 'archived'")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_npcs_updated_at ON npcs(updated_at)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_npcs_traits_gin ON npcs USING GIN (personality_traits jsonb_path_ops)")
+                
+                # Vector index (cosine distance for embeddings)
+                await conn.execute(f"""
+                    CREATE INDEX IF NOT EXISTS idx_npcs_embedding 
+                    ON npcs USING ivfflat (embedding vector_cosine_ops) 
+                    WITH (lists = 100)
+                """)
                 
             logger.info("NPCRepository initialized with database connection")
             
@@ -101,7 +143,7 @@ class NPCRepository:
             logger.error(f"Error getting NPC {npc_id}: {e}")
             return None
             
-    async def update_npc(self, npc_id: str, updates: Dict[str, Any]):
+    async def update_npc(self, npc_id: str, updates: Dict[str, Any]) -> bool:
         """Apply changes to Life Strand"""
         try:
             from .life_strand_schema import LifeStrandValidator
@@ -110,7 +152,7 @@ class NPCRepository:
             # Get current life strand
             current_life_strand = await self.get_npc(npc_id)
             if not current_life_strand:
-                raise ValueError(f"NPC {npc_id} not found")
+                return False
                 
             # Merge changes
             updated_life_strand = validator.merge_changes(current_life_strand, updates)
@@ -150,6 +192,7 @@ class NPCRepository:
                 )
                 
             logger.info(f"Updated NPC: {npc_id}")
+            return True
             
         except Exception as e:
             logger.error(f"Error updating NPC {npc_id}: {e}")
@@ -193,14 +236,16 @@ class NPCRepository:
                 conditions.append(f"background_age <= ${param_count}")
                 params.append(filters["age_max"])
                 
-            # Build final query
+            # Build final query with parameterized LIMIT
+            param_count += 1
+            params.append(int(filters.get("limit", 50)))
             query = f"""
                 SELECT id, name, location, faction, status, background_occupation,
                        background_age, personality_traits, created_at, updated_at
                 FROM npcs 
                 WHERE {' AND '.join(conditions)}
                 ORDER BY updated_at DESC
-                LIMIT {filters.get('limit', 50)}
+                LIMIT ${param_count}
             """
             
             async with self.pool.acquire() as conn:
@@ -209,9 +254,13 @@ class NPCRepository:
                 results = []
                 for row in rows:
                     result = dict(row)
-                    # Parse JSON fields
-                    if result["personality_traits"]:
-                        result["personality_traits"] = json.loads(result["personality_traits"])
+                    # Parse JSON fields - handle JSONB vs text columns
+                    traits = result.get("personality_traits")
+                    if isinstance(traits, str):
+                        result["personality_traits"] = json.loads(traits)
+                    elif traits is None:
+                        result["personality_traits"] = []
+                    # If it's already a list/dict, leave it as is
                     results.append(result)
                     
                 return results
@@ -254,7 +303,7 @@ class NPCRepository:
             logger.error(f"Error getting NPC for prompt {npc_id}: {e}")
             return {}
             
-    async def archive_npc(self, npc_id: str):
+    async def archive_npc(self, npc_id: str) -> bool:
         """Soft delete / archive NPC"""
         try:
             async with self.pool.acquire() as conn:
@@ -264,13 +313,14 @@ class NPCRepository:
                 )
                 
                 if result == "UPDATE 0":
-                    raise ValueError(f"NPC {npc_id} not found")
+                    return False
                     
             logger.info(f"Archived NPC: {npc_id}")
+            return True
             
         except Exception as e:
             logger.error(f"Error archiving NPC {npc_id}: {e}")
-            raise
+            return False
             
     async def restore_npc(self, npc_id: str):
         """Restore archived NPC"""
@@ -325,7 +375,13 @@ class NPCRepository:
                 results = []
                 for row in rows:
                     result = dict(row)
-                    result["personality_traits"] = json.loads(result["personality_traits"]) if result["personality_traits"] else []
+                    # Handle JSONB vs text columns safely
+                    traits = result.get("personality_traits")
+                    if isinstance(traits, str):
+                        result["personality_traits"] = json.loads(traits)
+                    elif traits is None:
+                        result["personality_traits"] = []
+                    # If it's already a list/dict, leave it as is
                     results.append(result)
                     
                 return results
@@ -390,7 +446,7 @@ class NPCRepository:
     async def cleanup_old_data(self, days_old: int = 365):
         """Cleanup very old archived NPCs"""
         try:
-            cutoff_date = datetime.utcnow().replace(day=datetime.utcnow().day - days_old)
+            cutoff_date = datetime.utcnow() - timedelta(days=days_old)
             
             async with self.pool.acquire() as conn:
                 result = await conn.execute("""
@@ -415,3 +471,110 @@ class NPCRepository:
                 logger.info("NPCRepository database connections closed")
         except Exception as e:
             logger.error(f"Error closing database connections: {e}")
+    
+    # --------- New helpers expected by main.py ----------
+    async def get_npc_count(self) -> int:
+        """Get count of active NPCs"""
+        try:
+            async with self.pool.acquire() as conn:
+                return await conn.fetchval("SELECT COUNT(*) FROM npcs WHERE status != 'archived'")
+        except Exception as e:
+            logger.error(f"Error counting NPCs: {e}")
+            return 0
+
+    async def list_npcs(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """List NPCs with pagination"""
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT id, name, location, faction, status, created_at, updated_at
+                    FROM npcs
+                    WHERE status != 'archived'
+                    ORDER BY updated_at DESC
+                    LIMIT $1 OFFSET $2
+                """, limit, offset)
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"Error listing NPCs: {e}")
+            return []
+
+    async def add_memory(self, npc_id: str, memory: Dict[str, Any]) -> bool:
+        """Append a new memory item to the life_strand_data.memories"""
+        try:
+            life = await self.get_npc(npc_id)
+            if not life:
+                return False
+            # Do NOT pre-append; just pass the new item so merge_changes extends correctly
+            await self.update_npc(npc_id, {"memories": [memory]})
+            return True
+        except Exception as e:
+            logger.error(f"Error adding memory to NPC {npc_id}: {e}")
+            return False
+
+    async def upsert_embedding(self, npc_id: str, vector: List[float]) -> None:
+        """Store/overwrite the embedding vector on the npcs row"""
+        try:
+            literal = "[" + ",".join(f"{x:.6f}" for x in vector) + "]"
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE npcs SET embedding = $2::vector, updated_at = $3 WHERE id = $1",
+                    npc_id, literal, datetime.utcnow()
+                )
+        except Exception as e:
+            logger.error(f"Error upserting embedding for {npc_id}: {e}")
+            raise
+
+    async def clear_embedding(self, npc_id: str) -> None:
+        """Clear the embedding vector for an NPC"""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE npcs SET embedding = NULL, updated_at = $2 WHERE id = $1",
+                    npc_id, datetime.utcnow()
+                )
+        except Exception as e:
+            logger.error(f"Error clearing embedding for {npc_id}: {e}")
+            raise
+
+    async def search_by_embedding(self, query_vector: List[float], limit: int = 10) -> List[Dict[str, Any]]:
+        """KNN search using pgvector; returns basic info and similarity"""
+        try:
+            literal = "[" + ",".join(f"{x:.6f}" for x in query_vector) + "]"
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, name, location, faction,
+                           (1 - (embedding <=> $1::vector)) AS similarity
+                    FROM npcs
+                    WHERE embedding IS NOT NULL AND status != 'archived'
+                    ORDER BY embedding <=> $1::vector DESC
+                    LIMIT $2
+                    """,
+                    literal, limit
+                )
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"Error in vector search: {e}")
+            return []
+
+    async def get_stats(self) -> Dict[str, Any]:
+        """Stats expected by /stats endpoint"""
+        try:
+            async with self.pool.acquire() as conn:
+                npc_count = await conn.fetchval("SELECT COUNT(*) FROM npcs WHERE status != 'archived'")
+                total_memories = await conn.fetchval("""
+                    SELECT COALESCE(SUM(jsonb_array_length(life_strand_data->'memories')), 0)
+                    FROM npcs WHERE status != 'archived'
+                """)
+                avg_relationships = await conn.fetchval("""
+                    SELECT COALESCE(AVG(jsonb_object_length(life_strand_data->'relationships')), 0)
+                    FROM npcs WHERE status != 'archived'
+                """)
+            return {
+                "npc_count": int(npc_count or 0),
+                "total_memories": int(total_memories or 0),
+                "avg_relationships": float(avg_relationships or 0.0)
+            }
+        except Exception as e:
+            logger.error(f"Error computing stats: {e}")
+            return {"npc_count": 0, "total_memories": 0, "avg_relationships": 0.0}

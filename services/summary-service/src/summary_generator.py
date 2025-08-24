@@ -1,18 +1,16 @@
-import asyncio
-import json
-import logging
+import asyncio, json, logging, os, re
 from typing import List, Dict, Any, Optional
 import aiohttp
 from datetime import datetime
-import re
 
 logger = logging.getLogger(__name__)
 
 class SummaryGenerator:
     """Generate conversation summaries using LLM"""
     
-    def __init__(self, model_service_url: str = "http://host.docker.internal:8001"):
+    def __init__(self, model_service_url: str = "http://host.docker.internal:8001", npc_service_url: Optional[str] = None):
         self.model_service_url = model_service_url
+        self.npc_service_url = npc_service_url or os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
         self.total_summaries = 0
         self.summary_prompts = {
             "conversation": """You are an expert conversation analyst. Create a concise summary of the following conversation between a user and an NPC character.
@@ -406,7 +404,8 @@ Create a natural memory entry that the character would have about this interacti
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"http://localhost:8003/npcs/{npc_id}/summary"
+                    f"{self.npc_service_url}/npc/{npc_id}/prompt",
+                    timeout=aiohttp.ClientTimeout(total=5)
                 ) as response:
                     if response.status == 200:
                         data = await response.json()

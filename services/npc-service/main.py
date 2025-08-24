@@ -4,12 +4,74 @@ import os
 from contextlib import asynccontextmanager
 from typing import Dict, List, Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from src.npc_repository import NPCRepository
 from src.life_strand_schema import LifeStrand, NPCUpdate
 from src.embedding_manager import embedding_manager
+
+# Graceful imports for optional monitoring components
+try:
+    from src.health_checker import HealthChecker
+    health_checker = HealthChecker()
+except ImportError:
+    # Dev fallback
+    class HealthChecker:
+        async def initialize(self): pass
+        async def start_monitoring(self): pass
+        async def stop_monitoring(self): pass
+        def is_monitoring(self): return False
+        async def get_system_health(self): return {}
+        async def get_service_status(self): return {}
+        async def get_service_health(self, name): return {}
+        async def restart_service(self, name): return False
+        def get_uptime(self): return 0
+        async def get_monitored_services(self): return []
+    health_checker = HealthChecker()
+
+try:
+    from src.metrics_collector import MetricsCollector
+    metrics_collector = MetricsCollector()
+except ImportError:
+    class MetricsCollector:
+        async def initialize(self): pass
+        async def start_collection(self): pass
+        async def stop_collection(self): pass
+        def get_metrics(self): return {}
+    metrics_collector = MetricsCollector()
+
+try:
+    from src.alert_manager import AlertManager
+    alert_manager = AlertManager()
+except ImportError:
+    class AlertManager:
+        async def initialize(self): pass
+        async def start_monitoring(self): pass
+        async def stop_monitoring(self): pass
+        async def send_alert(self, alert): pass
+    alert_manager = AlertManager()
+
+try:
+    from src.websocket_broadcaster import WebSocketBroadcaster
+    websocket_broadcaster = WebSocketBroadcaster()
+except ImportError:
+    import uuid
+    class WebSocketBroadcaster:
+        def __init__(self):
+            self.connections = {}
+        async def initialize(self): pass
+        async def start_broadcasting(self): pass
+        async def stop_broadcasting(self): pass
+        def add_connection(self, websocket): 
+            client_id = str(uuid.uuid4())
+            self.connections[client_id] = websocket
+            return client_id
+        def remove_connection(self, client_id):
+            self.connections.pop(client_id, None)
+        async def broadcast(self, message): pass
+    websocket_broadcaster = WebSocketBroadcaster()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -32,15 +94,39 @@ class UpdateNPCRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
+    tasks: List[asyncio.Task] = []
     try:
         await npc_repository.initialize()
         await embedding_manager.initialize()
+        await health_checker.initialize()
+        await metrics_collector.initialize()
+        await alert_manager.initialize()
+        await websocket_broadcaster.initialize()
+
+        tasks.append(asyncio.create_task(health_checker.start_monitoring()))
+        tasks.append(asyncio.create_task(metrics_collector.start_collection()))
+        tasks.append(asyncio.create_task(alert_manager.start_monitoring()))
+        tasks.append(asyncio.create_task(websocket_broadcaster.start_broadcasting()))
+        
         logger.info("NPC service started successfully")
         yield
     except Exception as e:
         logger.error(f"Failed to initialize NPC service: {e}")
         raise
     finally:
+        await health_checker.stop_monitoring()
+        await metrics_collector.stop_collection()
+        await alert_manager.stop_monitoring()
+        await websocket_broadcaster.stop_broadcasting()
+        
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+        
         await npc_repository.close()
         logger.info("NPC service shut down")
 
@@ -51,6 +137,22 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Add CORS middleware for frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # React frontend
+        "http://localhost:3001",  # Alternative frontend port
+        "http://localhost:3002",  # Admin dashboard
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -58,18 +160,23 @@ async def health_check():
     return {
         "status": "healthy",
         "total_npcs": npc_count,
-        "embeddings_enabled": embedding_manager.is_enabled()
+        "embeddings_enabled": embedding_manager.is_enabled(),
+        "health_monitoring": health_checker.is_monitoring(),
+        "database": "connected" if npc_repository.pool else "disconnected"
     }
 
 @app.post("/npc", response_model=Dict[str, str])
 async def create_npc(request: CreateNPCRequest):
     """Create a new NPC with Life Strand data"""
     try:
-        npc_id = await npc_repository.create_npc(request.life_strand)
+        # Convert Pydantic model to dict for repository
+        ls_dict = request.life_strand.model_dump(exclude_none=True)
+        npc_id = await npc_repository.create_npc(ls_dict)
         
-        # Generate embeddings if enabled
+        # Generate and persist embedding if enabled
         if embedding_manager.is_enabled():
-            await embedding_manager.generate_npc_embeddings(npc_id, request.life_strand)
+            vec = await embedding_manager.generate_npc_embedding(ls_dict)
+            await npc_repository.upsert_embedding(npc_id, vec)
             
         logger.info(f"Created NPC {npc_id}")
         return {"npc_id": npc_id}
@@ -101,21 +208,29 @@ async def get_npc_for_prompt(npc_id: str):
         if not life_strand:
             raise HTTPException(status_code=404, detail="NPC not found")
             
-        # Convert to prompt-optimized format
+        # Convert to prompt-optimized format with safe dict access
+        bg = life_strand.get("background", {}) or {}
+        personality = life_strand.get("personality", {}) or {}
+        current = life_strand.get("current_status", {}) or {}
+        relationships = life_strand.get("relationships", {}) or {}
+        memories = life_strand.get("memories", []) or []
+        knowledge = life_strand.get("knowledge", []) or []
+        
         prompt_data = {
-            "name": life_strand.background.name,
-            "age": life_strand.background.age,
-            "occupation": life_strand.background.occupation,
-            "location": life_strand.background.location,
-            "personality_traits": life_strand.personality.traits,
-            "current_mood": life_strand.current_status.mood,
-            "current_activity": life_strand.current_status.current_activity,
-            "recent_memories": life_strand.memories[-10:] if life_strand.memories else [],
+            "name": life_strand.get("name"),
+            "age": bg.get("age"),
+            "occupation": bg.get("occupation"),
+            "location": current.get("location", bg.get("location")),
+            "personality_traits": personality.get("traits", [])[:10],
+            "current_mood": current.get("mood"),
+            "current_activity": current.get("current_activity") or current.get("activity"),
+            "recent_memories": memories[-10:],
             "key_relationships": [
-                rel for rel in life_strand.relationships 
-                if rel.intensity > 0.7
+                {"person": k, **(v or {})}
+                for k, v in relationships.items()
+                if (v or {}).get("intensity", 0) >= 7
             ][:5],
-            "knowledge_areas": list(life_strand.knowledge.keys())[:10]
+            "knowledge_areas": [k.get("topic") for k in knowledge if isinstance(k, dict) and k.get("topic")][:10]
         }
         
         return prompt_data
@@ -130,14 +245,17 @@ async def get_npc_for_prompt(npc_id: str):
 async def update_npc(npc_id: str, request: UpdateNPCRequest):
     """Update NPC Life Strand with new information"""
     try:
-        success = await npc_repository.update_npc(npc_id, request.updates)
+        # Convert Pydantic model to dict for repository
+        updates = request.updates.model_dump(exclude_none=True)
+        success = await npc_repository.update_npc(npc_id, updates)
         if not success:
             raise HTTPException(status_code=404, detail="NPC not found")
             
         # Update embeddings if enabled
         if embedding_manager.is_enabled():
             updated_life_strand = await npc_repository.get_npc(npc_id)
-            await embedding_manager.update_npc_embeddings(npc_id, updated_life_strand)
+            vec = await embedding_manager.generate_npc_embedding(updated_life_strand)
+            await npc_repository.upsert_embedding(npc_id, vec)
             
         return {"message": "NPC updated successfully"}
         
@@ -151,13 +269,13 @@ async def update_npc(npc_id: str, request: UpdateNPCRequest):
 async def delete_npc(npc_id: str):
     """Delete an NPC"""
     try:
-        success = await npc_repository.delete_npc(npc_id)
+        success = await npc_repository.archive_npc(npc_id)
         if not success:
             raise HTTPException(status_code=404, detail="NPC not found")
             
-        # Remove embeddings if enabled
+        # Clear embedding if enabled
         if embedding_manager.is_enabled():
-            await embedding_manager.remove_npc_embeddings(npc_id)
+            await npc_repository.clear_embedding(npc_id)
             
         return {"message": "NPC deleted successfully"}
         
@@ -198,10 +316,9 @@ async def search_npcs(request: SearchNPCsRequest):
                 detail="Vector search not enabled"
             )
             
-        results = await embedding_manager.search_npcs(
-            request.query, 
-            limit=request.limit
-        )
+        # Generate query embedding and search
+        query_vec = await embedding_manager.generate_embedding(request.query.strip())
+        results = await npc_repository.search_by_embedding(query_vec, limit=request.limit)
         
         return {"results": results}
         
@@ -219,7 +336,7 @@ async def get_npc_memories(npc_id: str):
         if not life_strand:
             raise HTTPException(status_code=404, detail="NPC not found")
             
-        return {"memories": life_strand.memories}
+        return {"memories": life_strand.get("memories", [])}
         
     except HTTPException:
         raise
@@ -251,7 +368,7 @@ async def get_npc_relationships(npc_id: str):
         if not life_strand:
             raise HTTPException(status_code=404, detail="NPC not found")
             
-        return {"relationships": life_strand.relationships}
+        return {"relationships": life_strand.get("relationships", {})}
         
     except HTTPException:
         raise
@@ -274,6 +391,44 @@ async def get_service_stats():
     except Exception as e:
         logger.error(f"Error getting service stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/metrics")
+async def get_metrics():
+    """Get Prometheus metrics for monitoring"""
+    try:
+        stats = await npc_repository.get_stats()
+        return {
+            "npc_service_npc_count": stats["npc_count"],
+            "npc_service_total_memories": stats["total_memories"],
+            "npc_service_avg_relationships_per_npc": stats["avg_relationships"],
+            "npc_service_embeddings_enabled": 1 if embedding_manager.is_enabled() else 0,
+            "npc_service_status": 1
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/ws/monitor")
+async def monitor_websocket(websocket: WebSocket):
+    """WebSocket endpoint for real-time monitoring updates"""
+    await websocket.accept()
+    client_id = None
+    try:
+        client_id = websocket_broadcaster.add_connection(websocket)
+        logger.info(f"Monitor WebSocket connected: {client_id}")
+        
+        while True:
+            # Send periodic updates or wait for messages
+            await websocket.receive_text()  # Keep connection alive
+            
+    except WebSocketDisconnect:
+        logger.info(f"Monitor WebSocket disconnected: {client_id}")
+    except Exception as e:
+        logger.error(f"Monitor WebSocket error: {e}")
+    finally:
+        if client_id is not None:
+            websocket_broadcaster.remove_connection(client_id)
 
 if __name__ == "__main__":
     import uvicorn

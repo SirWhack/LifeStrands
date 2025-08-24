@@ -96,7 +96,8 @@ class WebSocketHandler:
         self.connection_manager = ConnectionManager()
         self.heartbeat_interval = 30
         self.connection_timeout = 300  # 5 minutes
-        self.jwt_secret = "your-jwt-secret"  # Should be from config
+        import os
+        self.jwt_secret = os.getenv("WS_JWT_SECRET", "dev-only-secret")
         self.cleanup_task = None
     
     @property
@@ -287,8 +288,8 @@ class WebSocketHandler:
                 except jwt.InvalidTokenError:
                     logger.warning("Invalid JWT token in WebSocket connection")
                     
-            # Return anonymous user for demo
-            return f"anonymous_{int(time.time())}"
+            # No/invalid token -> anonymous user for demo
+            return f"anonymous-{int(time.time())}"
             
         except Exception as e:
             logger.error(f"Error authenticating WebSocket connection: {e}")

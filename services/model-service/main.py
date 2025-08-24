@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from typing import List
 
 try:
     from src.model_manager import ModelManager
@@ -34,6 +35,9 @@ class GenerateRequest(BaseModel):
 
 class LoadModelRequest(BaseModel):
     model_type: str
+
+class EmbeddingsRequest(BaseModel):
+    texts: List[str]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -75,15 +79,13 @@ app = FastAPI(
 @app.get("/ping")
 async def ping():
     """Simple ping endpoint"""
-    print("=== PING CALLED ===")
     logger.info("Ping endpoint called")
     return {"message": "pong", "service": "model-service"}
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    print("=== HEALTH CHECK CALLED ===")  # Direct print to console
-    logger.info("Health check endpoint called")  # Changed to INFO level
+    logger.info("Health check endpoint called")
     if not model_manager:
         logger.warning("Health check: ModelManager not initialized")
         return {"status": "degraded", "error": "ModelManager not initialized"}
@@ -100,6 +102,8 @@ async def health_check():
 async def generate_text(request: GenerateRequest):
     """Generate text with streaming or completion mode"""
     try:
+        if not model_manager:
+            raise HTTPException(status_code=503, detail="ModelManager not ready")
         # Load model if needed
         if model_manager.current_model_type != request.model_type:
             success = await model_manager.load_model(request.model_type)
@@ -116,14 +120,26 @@ async def generate_text(request: GenerateRequest):
         }
         
         if request.stream:
+            import json
+            
             async def generate_stream():
                 async for token in model_manager.generate_stream(request.prompt, params):
-                    yield f"data: {token}\n\n"
-                yield "data: [DONE]\n\n"
+                    # Encode token in JSON to handle special characters safely
+                    token_data = json.dumps({"token": token})
+                    yield f"data: {token_data}\n\n"
+                
+                # Send completion signal
+                completion_data = json.dumps({"done": True})
+                yield f"data: {completion_data}\n\n"
             
             return StreamingResponse(
                 generate_stream(), 
-                media_type="text/event-stream"
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
             )
         else:
             result = await model_manager.generate_completion(request.prompt, params)
@@ -158,6 +174,8 @@ async def load_model(request: LoadModelRequest):
 @app.post("/unload-model")
 async def unload_model():
     """Unload current model to free VRAM"""
+    if not model_manager:
+        raise HTTPException(status_code=503, detail="ModelManager not ready")
     try:
         await model_manager.unload_current_model()
         return {"message": "Model unloaded successfully"}
@@ -168,11 +186,18 @@ async def unload_model():
 @app.get("/status")
 async def get_status():
     """Get detailed model and GPU status"""
-    return await model_manager.get_model_status()
+    if not model_manager:
+        raise HTTPException(status_code=503, detail="ModelManager not ready")
+    status = await model_manager.get_model_status()
+    # Add state machine history for debugging
+    status["state_history"] = await model_manager.state_machine.get_state_history()
+    return status
 
 @app.post("/switch/{model_type}")
 async def switch_model(model_type: str):
     """Windows-compatible model switching endpoint"""
+    if not model_manager:
+        raise HTTPException(status_code=503, detail="ModelManager not ready")
     try:
         if model_type not in model_manager.model_configs:
             raise HTTPException(404, f"Model type '{model_type}' not found")
@@ -195,11 +220,15 @@ async def switch_model(model_type: str):
 @app.get("/vram")
 async def get_vram_usage():
     """Real-time VRAM monitoring"""
+    if not model_manager:
+        raise HTTPException(status_code=503, detail="ModelManager not ready")
     return await model_manager.monitor_vram()
 
 @app.post("/emergency-shutdown")
 async def emergency_shutdown():
     """Emergency model cleanup"""
+    if not model_manager:
+        raise HTTPException(status_code=503, detail="ModelManager not ready")
     try:
         await model_manager.emergency_shutdown()
         return {"message": "Emergency shutdown completed"}
@@ -228,10 +257,10 @@ async def get_metrics():
         }
 
 @app.post("/embeddings")
-async def generate_embeddings(request: dict):
+async def generate_embeddings(request: EmbeddingsRequest):
     """Generate embeddings for texts"""
     try:
-        texts = request.get("texts", [])
+        texts = request.texts
         if not texts:
             raise HTTPException(status_code=400, detail="No texts provided")
             
@@ -255,20 +284,36 @@ async def graceful_shutdown():
     try:
         logger.info("Graceful shutdown requested")
         
-        # Unload current model to free VRAM
-        await model_manager.unload_current_model()
-        logger.info("Model unloaded successfully")
-        
-        # Clean up resources
-        await model_manager.emergency_shutdown()
-        logger.info("Resources cleaned up")
+        if model_manager:
+            # Unload current model to free VRAM
+            await model_manager.unload_current_model()
+            logger.info("Model unloaded successfully")
+            
+            # Clean up resources
+            await model_manager.emergency_shutdown()
+            logger.info("Resources cleaned up")
+        else:
+            logger.warning("ModelManager not available during shutdown")
         
         # Schedule service shutdown
         def shutdown_server():
-            os.kill(os.getpid(), signal.SIGTERM)
+            try:
+                if os.name == "nt":
+                    # Try CTRL_BREAK_EVENT first, fallback to SIGTERM
+                    try:
+                        os.kill(os.getpid(), signal.CTRL_BREAK_EVENT)
+                    except (AttributeError, OSError):
+                        # Fallback for Windows systems without CTRL_BREAK_EVENT
+                        os.kill(os.getpid(), signal.SIGTERM)
+                else:
+                    os.kill(os.getpid(), signal.SIGTERM)
+            except Exception as sig_error:
+                logger.error(f"Error sending shutdown signal: {sig_error}")
+                # Force exit as last resort
+                os._exit(0)
         
         # Delay shutdown to allow response to be sent
-        asyncio.get_event_loop().call_later(1.0, shutdown_server)
+        asyncio.get_running_loop().call_later(1.0, shutdown_server)
         
         return {"message": "Shutdown initiated successfully"}
         

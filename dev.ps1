@@ -14,12 +14,43 @@
 
 param(
     [Parameter(Position=0)]
-    [ValidateSet("help", "dev-up", "dev-down", "model-start", "model-stop", "logs", "status", "health", "restart", "docker-restart", "rebuild")]
+    [ValidateSet("help", "setup-model", "dev-up", "dev-down", "model-start", "model-stop", "logs", "status", "health", "restart", "docker-restart", "rebuild")]
     [string]$Command = "help",
     
     [Parameter(Position=1)]
     [string]$ServiceName
 )
+
+function Setup-ModelService {
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "    Life Strands Model Service Setup         " -ForegroundColor Cyan
+    Write-Host "    Vulkan GPU Acceleration Environment      " -ForegroundColor Cyan
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    Write-Host "Running Windows model service environment setup..." -ForegroundColor Yellow
+    
+    # Check if setup script exists
+    if (-not (Test-Path "setup_model_service_windows.ps1")) {
+        Write-Host "ERROR: Setup script not found: setup_model_service_windows.ps1" -ForegroundColor Red
+        Write-Host "Make sure you're running this from the Life Strands root directory" -ForegroundColor Yellow
+        return $false
+    }
+    
+    try {
+        # Run the setup script
+        & ".\setup_model_service_windows.ps1"
+        
+        Write-Host ""
+        Write-Host "✅ Model service setup completed!" -ForegroundColor Green
+        Write-Host "You can now run: .\dev.ps1 dev-up" -ForegroundColor Cyan
+        return $true
+    }
+    catch {
+        Write-Host "❌ Error during setup: $_" -ForegroundColor Red
+        return $false
+    }
+}
 
 function Show-Help {
     Write-Host "================================================" -ForegroundColor Cyan
@@ -28,6 +59,7 @@ function Show-Help {
     Write-Host "================================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Available commands:" -ForegroundColor Yellow
+    Write-Host "  .\dev.ps1 setup-model  Setup model service environment (run first time)" -ForegroundColor Cyan
     Write-Host "  .\dev.ps1 dev-up       Start all services (Docker + Native Model)" -ForegroundColor Green
     Write-Host "  .\dev.ps1 dev-down     Stop all services" -ForegroundColor Red
     Write-Host "  .\dev.ps1 model-start  Start only model service in new window" -ForegroundColor Blue
@@ -52,33 +84,23 @@ function Start-ModelService {
         return $false
     }
     
-    # Start the model service in a new window
+    # Check if virtual environment exists
+    if (-not (Test-Path "rocm_env\Scripts\Activate.ps1")) {
+        Write-Host "ERROR: Virtual environment not found!" -ForegroundColor Red
+        Write-Host "Run setup first: .\dev.ps1 setup-model" -ForegroundColor Yellow
+        return $false
+    }
+    
+    # Use the proper Vulkan startup script
     try {
+        $currentDir = Get-Location
         $startInfo = @{
             FilePath = "powershell.exe"
             ArgumentList = @(
+                "-ExecutionPolicy", "Bypass",
                 "-NoExit",
-                "-Command",
-                @"
-`$Host.UI.RawUI.WindowTitle = 'Life Strands - Model Service (Vulkan GPU)'
-`$Host.UI.RawUI.BackgroundColor = 'Black'
-`$Host.UI.RawUI.ForegroundColor = 'Cyan'
-Clear-Host
-Write-Host '=================================================' -ForegroundColor Green
-Write-Host '    Life Strands - Native Model Service        ' -ForegroundColor Green
-Write-Host '    AMD 7900 XTX Vulkan GPU Acceleration       ' -ForegroundColor Green
-Write-Host '=================================================' -ForegroundColor Green
-Write-Host ''
-Write-Host 'Working Directory: ' -NoNewline -ForegroundColor Yellow
-Write-Host (Get-Location).Path -ForegroundColor Cyan
-Write-Host 'Activating Python virtual environment...' -ForegroundColor Yellow
-& '.\rocm_env\Scripts\Activate.ps1'
-Write-Host 'Virtual environment activated' -ForegroundColor Green
-Write-Host 'Starting native Windows model service...' -ForegroundColor Green
-Write-Host ''
-cd 'services\model-service'
-python main.py
-"@
+                "-Command", 
+                "cd '$currentDir'; & '.\services\model-service\scripts\start_vulkan_model_service.ps1'"
             )
             WindowStyle = "Normal"
             PassThru = $true
@@ -193,6 +215,33 @@ function Start-DevEnvironment {
     Write-Host "================================================" -ForegroundColor Cyan
     Write-Host ""
     
+    # Check if virtual environment exists first
+    if (-not (Test-Path "rocm_env\Scripts\Activate.ps1")) {
+        Write-Host "⚠️  Virtual environment not found!" -ForegroundColor Yellow
+        Write-Host ""
+        $runSetup = Read-Host "Do you want to run the model service setup now? (y/N)"
+        
+        if ($runSetup -like "y*") {
+            Write-Host ""
+            Write-Host "Running model service setup first..." -ForegroundColor Cyan
+            $setupSuccess = Setup-ModelService
+            
+            if (-not $setupSuccess) {
+                Write-Host "❌ Setup failed. Cannot continue with dev-up." -ForegroundColor Red
+                return
+            }
+            
+            Write-Host ""
+            Write-Host "Setup completed! Continuing with service startup..." -ForegroundColor Green
+            Write-Host ""
+        } else {
+            Write-Host ""
+            Write-Host "❌ Cannot start services without virtual environment." -ForegroundColor Red
+            Write-Host "Please run: .\dev.ps1 setup-model" -ForegroundColor Yellow
+            return
+        }
+    }
+    
     Write-Host "Step 1: Starting native Windows model service..." -ForegroundColor Yellow
     $modelStarted = Start-ModelService
     
@@ -200,7 +249,7 @@ function Start-DevEnvironment {
     Write-Host "Step 2: Starting Docker services..." -ForegroundColor Yellow
     
     try {
-        $result = docker-compose -f docker-compose.native-model.yml up -d
+        $result = docker-compose -f docker-compose.native-model.yml --profile dev-tools --profile frontend up -d
         if ($LASTEXITCODE -ne 0) {
             Write-Host "ERROR: Failed to start Docker services" -ForegroundColor Red
             Write-Host "Make sure Docker is running and try again" -ForegroundColor Yellow
@@ -375,6 +424,7 @@ function Test-ServiceHealth {
 # Main command dispatcher
 switch ($Command) {
     "help" { Show-Help }
+    "setup-model" { Setup-ModelService }
     "dev-up" { Start-DevEnvironment }
     "dev-down" { Stop-DevEnvironment }
     "restart" { 

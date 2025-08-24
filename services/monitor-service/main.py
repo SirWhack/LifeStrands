@@ -68,9 +68,9 @@ async def health_check():
     return {
         "status": "healthy",
         "monitoring_active": health_checker.is_monitoring(),
-        "metrics_collecting": metrics_collector.is_collecting(),
-        "alerts_active": alert_manager.is_monitoring(),
-        "websocket_connections": len(websocket_broadcaster.active_connections)
+        "metrics_collecting": metrics_collector.is_collecting,
+        "alerts_active": alert_manager.is_monitoring,
+        "websocket_connections": len(getattr(websocket_broadcaster, 'active_connections', []))
     }
 
 @app.get("/system/health")

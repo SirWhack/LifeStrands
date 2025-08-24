@@ -66,6 +66,11 @@ class HealthChecker:
         # Health history for trend analysis
         self.health_history = {}
         self.max_history = 100
+        self.monitoring_active = True
+        
+    def is_monitoring(self) -> bool:
+        """Check if monitoring is active"""
+        return getattr(self, 'monitoring_active', True)
         
     async def check_all_services(self) -> Dict[str, Any]:
         """Check health of all microservices"""

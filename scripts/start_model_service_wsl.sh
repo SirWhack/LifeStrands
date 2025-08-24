@@ -30,33 +30,38 @@ fi
 echo "Starting model service in new Windows terminal..."
 
 # Convert WSL path to Windows path
-WIN_SERVICE_PATH=$(wslpath -w "$SERVICE_DIR")
+WIN_SERVICE_PATH=$(wslpath -w "$SERVICE_DIR" 2>/dev/null)
+if [ $? -ne 0 ] || [ -z "$WIN_SERVICE_PATH" ]; then
+    echo "Warning: wslpath failed, using manual conversion..."
+    # Manual conversion for /mnt/d/ paths
+    WIN_SERVICE_PATH=$(echo "$SERVICE_DIR" | sed 's|/mnt/\([a-z]\)/|\U\1:/|')
+fi
 echo "Windows Service Path: $WIN_SERVICE_PATH"
 
 # Try different methods to start the service
 start_service() {
-    # Method 1: Simple approach - start python directly in new window
-    if command -v cmd.exe >/dev/null 2>&1; then
-        echo "Using Command Prompt..."
-        # Use a simpler approach - just start python in the service directory
-        cd "$SERVICE_DIR"
-        cmd.exe /c "start \"Life Strands Model Service\" cmd.exe /k python main.py"
-        return $?
-    fi
+    # Get the root directory Windows path
+    ROOT_WIN_PATH=$(echo "$ROOT_DIR" | sed 's|/mnt/\([a-z]\)/|\U\1:/|')
+    SCRIPT_WIN_PATH="$ROOT_WIN_PATH\\services\\model-service\\scripts\\start_vulkan_model_service.ps1"
     
-    # Method 2: Try Windows Terminal if available
+    # Method 1: Try Windows Terminal with PowerShell (best option)
     if command -v wt.exe >/dev/null 2>&1; then
-        echo "Using Windows Terminal..."
-        cd "$SERVICE_DIR"
-        wt.exe new-tab --title "Life Strands Model Service" cmd.exe /k python main.py
+        echo "Using Windows Terminal with PowerShell..."
+        wt.exe new-tab --title "LifeStrandsModel" --startingDirectory "$ROOT_WIN_PATH" powershell.exe -ExecutionPolicy Bypass -File "$SCRIPT_WIN_PATH"
         return $?
     fi
     
-    # Method 3: PowerShell fallback
+    # Method 2: PowerShell direct approach
     if command -v powershell.exe >/dev/null 2>&1; then
         echo "Using PowerShell..."
-        cd "$SERVICE_DIR"
-        powershell.exe -Command "Start-Process python -ArgumentList 'main.py' -WorkingDirectory '$WIN_SERVICE_PATH' -WindowStyle Normal"
+        powershell.exe -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy', 'Bypass', '-File', '$SCRIPT_WIN_PATH' -WorkingDirectory '$ROOT_WIN_PATH' -WindowStyle Normal"
+        return $?
+    fi
+    
+    # Method 3: Command Prompt fallback
+    if command -v cmd.exe >/dev/null 2>&1; then
+        echo "Using Command Prompt..."
+        cmd.exe /c start "LifeStrandsModel" powershell.exe -ExecutionPolicy Bypass -File "$SCRIPT_WIN_PATH"
         return $?
     fi
     
@@ -101,12 +106,17 @@ if start_service; then
 else
     echo "❌ Failed to start model service terminal automatically"
     echo
+    ROOT_WIN_PATH=$(echo "$ROOT_DIR" | sed 's|/mnt/\([a-z]\)/|\U\1:/|')
     echo "Manual startup options:"
-    echo "1. Open Windows Terminal or Command Prompt"
-    echo "2. Navigate to: $WIN_SERVICE_PATH"
-    echo "3. Run: python main.py"
+    echo "1. First, set up the environment (if not done already):"
+    echo "   Open PowerShell in: $ROOT_WIN_PATH"
+    echo "   Run: .\\setup_model_service_windows.ps1"
     echo
-    echo "Or from WSL, try:"
-    echo "cd \"$SERVICE_DIR\" && python main.py"
+    echo "2. Then start the service:"
+    echo "   Run: .\\services\\model-service\\scripts\\start_vulkan_model_service.ps1"
+    echo
+    echo "Or from WSL, try manually:"
+    echo "   cd \"$ROOT_DIR\" && powershell.exe ./setup_model_service_windows.ps1"
+    echo "   cd \"$ROOT_DIR\" && powershell.exe ./services/model-service/scripts/start_vulkan_model_service.ps1"
     exit 1
 fi

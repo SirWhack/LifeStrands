@@ -52,7 +52,7 @@ class ConversationManager:
         self.active_sessions: Dict[str, ConversationSession] = {}
         self.cleanup_interval = 300  # 5 minutes
         self.model_service_url = os.getenv("MODEL_SERVICE_URL", "http://host.docker.internal:8001")
-        self.npc_service_url = "http://localhost:8003"
+        self.npc_service_url = os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
         
     async def initialize(self):
         """Initialize Redis connection and start cleanup task"""
@@ -114,7 +114,10 @@ class ConversationManager:
             session.add_message("user", message)
             
             # Build context for LLM
-            from .context_builder import ContextBuilder
+            try:
+                from .context_builder import ContextBuilder  # package context
+            except Exception:
+                from context_builder import ContextBuilder   # module context
             context_builder = ContextBuilder()
             
             # Get NPC data
@@ -264,7 +267,8 @@ class ConversationManager:
         """Validate NPC exists"""
         try:
             import aiohttp
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(f"{self.npc_service_url}/npc/{npc_id}") as response:
                     return response.status == 200
         except Exception as e:
@@ -275,7 +279,8 @@ class ConversationManager:
         """Get NPC data for context building"""
         try:
             import aiohttp
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(f"{self.npc_service_url}/npc/{npc_id}/prompt") as response:
                     if response.status == 200:
                         return await response.json()
@@ -287,32 +292,37 @@ class ConversationManager:
             return {}
             
     async def _stream_from_model(self, prompt: str, session_id: str) -> AsyncGenerator[str, None]:
-        """Stream response from model service"""
+        """Stream response from model service (SSE framing)."""
+        import aiohttp
+        timeout = aiohttp.ClientTimeout(total=300, connect=10, sock_read=300)
+        payload = {
+            "prompt": prompt,
+            "model_type": "chat",
+            "max_tokens": 512,
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "stream": True,
+        }
         try:
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                payload = {
-                    "prompt": prompt,
-                    "session_id": session_id,
-                    "stream": True
-                }
-                
-                async with session.post(
-                    f"{self.model_service_url}/generate/stream",
-                    json=payload
-                ) as response:
-                    if response.status == 200:
-                        async for line in response.content:
-                            if line:
-                                try:
-                                    data = json.loads(line.decode().strip())
-                                    if "token" in data:
-                                        yield data["token"]
-                                except json.JSONDecodeError:
-                                    continue
-                    else:
-                        raise Exception(f"Model service error: {response.status}")
-                        
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(f"{self.model_service_url}/generate", json=payload) as resp:
+                    resp.raise_for_status()
+                    async for raw in resp.content:
+                        if not raw:
+                            continue
+                        line = raw.decode(errors="ignore").strip()
+                        if not line.startswith("data: "):
+                            continue
+                        chunk = line[len("data: "):]
+                        try:
+                            obj = json.loads(chunk)
+                        except json.JSONDecodeError:
+                            continue
+                        if obj.get("done"):
+                            break
+                        token = obj.get("token")
+                        if token is not None:
+                            yield token
         except Exception as e:
             logger.error(f"Error streaming from model service: {e}")
             raise

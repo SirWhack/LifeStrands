@@ -13,7 +13,7 @@ class QueueConsumer:
     
     def __init__(self, redis_url: str = None):
         import os
-        self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379")
+        self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379")
         self.redis_client: Optional[redis.Redis] = None
         self.is_running = False
         self.consumer_tasks = []
@@ -35,16 +35,18 @@ class QueueConsumer:
         
         self.summary_generator = SummaryGenerator()
         self.change_extractor = ChangeExtractor()
-        self.memory_updater = MemoryUpdater()
+        npc_service_url = os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
+        self.memory_updater = MemoryUpdater(npc_service_url)
         
     async def initialize(self):
         """Initialize Redis connection and prepare consumer"""
         try:
             self.redis_client = redis.from_url(self.redis_url)
             await self.redis_client.ping()
-            
+            await self.summary_generator.initialize()
+            await self.change_extractor.initialize()
+            await self.memory_updater.initialize()
             logger.info("QueueConsumer initialized successfully")
-            
         except Exception as e:
             logger.error(f"Failed to initialize QueueConsumer: {e}")
             raise
@@ -233,9 +235,13 @@ class QueueConsumer:
                 logger.info(f"Queued retry #{retry_count + 1} for session {session_id}")
                 
             else:
-                # Max retries reached, store error
+                # Max retries reached: move to failed queue and store error
+                await self.redis_client.lpush(
+                    "summary_queue:failed",
+                    json.dumps(message, default=str)
+                )
                 await self._store_processing_error(session_id, error, message)
-                logger.error(f"Max retries reached for session {session_id}, storing error")
+                logger.error(f"Max retries reached for session {session_id}, moved to failed queue")
                 
         except Exception as e:
             logger.error(f"Error handling processing error: {e}")
@@ -303,9 +309,11 @@ class QueueConsumer:
         """Get NPC data for analysis"""
         try:
             import aiohttp
+            import os
             
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"http://localhost:8003/npcs/{npc_id}") as response:
+                npc_service_url = os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
+                async with session.get(f"{npc_service_url}/npc/{npc_id}") as response:
                     if response.status == 200:
                         return await response.json()
                     else:

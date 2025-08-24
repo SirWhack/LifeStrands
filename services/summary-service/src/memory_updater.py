@@ -2,6 +2,7 @@ import asyncio
 import aiohttp
 import json
 import logging
+import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
@@ -10,10 +11,11 @@ logger = logging.getLogger(__name__)
 class MemoryUpdater:
     """Apply approved changes to NPC Life Strands"""
     
-    def __init__(self, npc_service_url: str = "http://localhost:8003"):
-        self.npc_service_url = npc_service_url
+    def __init__(self, npc_service_url: str = None):
+        self.npc_service_url = npc_service_url or os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
         self.max_memories_per_npc = 50
         self.memory_importance_threshold = 3
+        self._total_updates_applied = 0
     
     async def initialize(self):
         """Initialize the MemoryUpdater"""
@@ -72,7 +74,7 @@ class MemoryUpdater:
                     
             # Update NPC with all changes
             await self._update_npc(npc_id, updated_life_strand)
-            
+            self._total_updates_applied += len(changes)
             logger.info(f"Applied {len(changes)} changes to NPC {npc_id}")
             
         except Exception as e:
@@ -397,7 +399,7 @@ class MemoryUpdater:
         """Get NPC data from NPC service"""
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.npc_service_url}/npcs/{npc_id}") as response:
+                async with session.get(f"{self.npc_service_url}/npc/{npc_id}") as response:
                     if response.status == 200:
                         return await response.json()
                     else:
@@ -413,7 +415,7 @@ class MemoryUpdater:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.put(
-                    f"{self.npc_service_url}/npcs/{npc_id}",
+                    f"{self.npc_service_url}/npc/{npc_id}",
                     json=life_strand
                 ) as response:
                     if response.status not in [200, 204]:
@@ -500,3 +502,6 @@ class MemoryUpdater:
         except Exception as e:
             logger.error(f"Error validating change data: {e}")
             return False
+            
+    def get_total_updates(self) -> int:
+        return self._total_updates_applied

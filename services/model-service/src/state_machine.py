@@ -3,7 +3,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from enum import Enum
 from datetime import datetime
-import json
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -15,13 +15,13 @@ class ModelState(Enum):
     UNLOADING = "unloading"
     ERROR = "error"
 
+@dataclass(slots=True)
 class StateTransition:
-    def __init__(self, from_state: ModelState, to_state: ModelState, timestamp: datetime, success: bool = True, error: Optional[str] = None):
-        self.from_state = from_state
-        self.to_state = to_state
-        self.timestamp = timestamp
-        self.success = success
-        self.error = error
+    from_state: ModelState
+    to_state: ModelState
+    timestamp: datetime
+    success: bool = True
+    error: Optional[str] = None
 
 class ModelStateMachine:
     """Manages model state transitions and validates operations"""
@@ -30,7 +30,7 @@ class ModelStateMachine:
     VALID_TRANSITIONS = {
         ModelState.IDLE: [ModelState.LOADING, ModelState.ERROR],
         ModelState.LOADING: [ModelState.LOADED, ModelState.ERROR, ModelState.IDLE],
-        ModelState.LOADED: [ModelState.GENERATING, ModelState.UNLOADING, ModelState.ERROR],
+        ModelState.LOADED: [ModelState.GENERATING, ModelState.UNLOADING, ModelState.IDLE, ModelState.ERROR],
         ModelState.GENERATING: [ModelState.LOADED, ModelState.ERROR],
         ModelState.UNLOADING: [ModelState.IDLE, ModelState.ERROR],
         ModelState.ERROR: [ModelState.IDLE, ModelState.LOADING, ModelState.UNLOADING]
@@ -40,6 +40,7 @@ class ModelStateMachine:
         self.current_state = ModelState.IDLE
         self.state_history: List[StateTransition] = []
         self.max_history = 100
+        self._state_lock = asyncio.Lock()
         
     def can_transition(self, from_state: ModelState, to_state: ModelState) -> bool:
         """Check if state transition is valid"""
@@ -52,23 +53,22 @@ class ModelStateMachine:
             
     async def transition(self, new_state: ModelState):
         """Execute state transition with safety checks"""
-        try:
-            if not self.can_transition(self.current_state, new_state):
-                error_msg = f"Invalid transition from {self.current_state.value} to {new_state.value}"
-                logger.error(error_msg)
-                await self._record_transition(self.current_state, new_state, False, error_msg)
-                raise ValueError(error_msg)
-                
-            old_state = self.current_state
-            self.current_state = new_state
-            
-            await self._record_transition(old_state, new_state, True)
-            logger.info(f"State transition: {old_state.value} -> {new_state.value}")
-            
-        except Exception as e:
-            logger.error(f"Error during state transition: {e}")
-            await self._record_transition(self.current_state, new_state, False, str(e))
-            raise
+        async with self._state_lock:
+            try:
+                if not self.can_transition(self.current_state, new_state):
+                    error_msg = f"Invalid transition from {self.current_state.value} to {new_state.value}"
+                    logger.error(error_msg)
+                    # Record once and raise
+                    await self._record_transition(self.current_state, new_state, False, error_msg)
+                    raise ValueError(error_msg)
+                old_state = self.current_state
+                self.current_state = new_state
+                await self._record_transition(old_state, new_state, True)
+                logger.info(f"State transition: {old_state.value} -> {new_state.value}")
+            except Exception as e:
+                # Already recorded in invalid case; just log and re-raise
+                logger.error(f"Error during state transition: {e}")
+                raise
             
     async def handle_error(self, error: Exception):
         """Error recovery and state restoration"""
@@ -83,7 +83,8 @@ class ModelStateMachine:
                 # Failed to load, go back to idle
                 recovery_state = ModelState.IDLE
             elif self.current_state == ModelState.GENERATING:
-                # Failed during generation, try to restore loaded state
+                # Failed during generation; first go to LOADED, then IDLE if needed
+                # GENERATING -> LOADED is valid, then LOADED -> IDLE
                 recovery_state = ModelState.LOADED
             elif self.current_state == ModelState.UNLOADING:
                 # Failed to unload, force to idle
@@ -99,7 +100,21 @@ class ModelStateMachine:
             
             # Then attempt recovery
             await asyncio.sleep(1)  # Brief delay before recovery
-            await self.transition(recovery_state)
+            try:
+                await self.transition(recovery_state)
+                
+                # If we recovered to LOADED but want to get to IDLE (e.g., from GENERATING error)
+                if recovery_state == ModelState.LOADED and old_state == ModelState.GENERATING:
+                    # Optionally transition to IDLE after a brief delay
+                    await asyncio.sleep(0.5)
+                    if self.can_transition(ModelState.LOADED, ModelState.IDLE):
+                        await self.transition(ModelState.IDLE)
+                        
+            except Exception as recovery_error:
+                logger.error(f"Recovery transition failed: {recovery_error}")
+                # Force to IDLE as last resort
+                self.current_state = ModelState.IDLE
+                await self._record_transition(ModelState.ERROR, ModelState.IDLE, False, f"Forced recovery: {recovery_error}")
             
             logger.info(f"Error recovery completed: {old_state.value} -> ERROR -> {recovery_state.value}")
             
@@ -181,7 +196,7 @@ class ModelStateMachine:
                 "total_transitions": total_transitions,
                 "successful_transitions": successful_transitions,
                 "failed_transitions": failed_transitions,
-                "success_rate": successful_transitions / total_transitions if total_transitions > 0 else 1.0,
+                "success_rate": (successful_transitions / total_transitions) if total_transitions > 0 else None,
                 "transition_counts": transition_counts,
                 "is_operational": self.is_operational(),
                 "is_busy": self.is_busy(),
