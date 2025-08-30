@@ -57,6 +57,12 @@ class MemoryMonitor:
                 amd_stats = await self._get_amd_gpu_stats()
                 if amd_stats.get("available", False):
                     return amd_stats
+                
+                # Fallback: detect AMD GPU via WMI for Vulkan backend
+                if self.backend == "vulkan":
+                    vulkan_stats = await self._get_vulkan_gpu_stats()
+                    if vulkan_stats.get("available", False):
+                        return vulkan_stats
             
             # Try NVML second (for NVIDIA GPUs)
             if NVML_AVAILABLE:
@@ -463,3 +469,229 @@ class MemoryMonitor:
         except Exception as e:
             logger.debug(f"AMD GPU stats error: {e}")
             return {"available": False, "error": str(e)}
+    
+    async def _get_vulkan_gpu_stats(self) -> Dict[str, Any]:
+        """Get GPU statistics via multiple methods for Windows Vulkan backend"""
+        try:
+            import subprocess
+            
+            # Method 1: Try enhanced WMI query with multiple properties
+            ps_cmd = [
+                "powershell", "-Command", """
+                $gpus = Get-WmiObject -Class Win32_VideoController | Where-Object {$_.Name -like '*AMD*' -or $_.Name -like '*Radeon*' -or $_.Name -like '*7900*'}
+                $result = @()
+                foreach ($gpu in $gpus) {
+                    $obj = @{
+                        'Name' = $gpu.Name
+                        'AdapterRAM' = $gpu.AdapterRAM
+                        'DriverVersion' = $gpu.DriverVersion
+                        'VideoMemoryType' = $gpu.VideoMemoryType
+                        'Description' = $gpu.Description
+                    }
+                    $result += $obj
+                }
+                $result | ConvertTo-Json -Depth 2
+                """
+            ]
+            
+            result = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=15,
+                                  creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                import json
+                try:
+                    gpu_data = json.loads(result.stdout)
+                    devices = []
+                    
+                    # Handle both single GPU (dict) and multiple GPUs (list)
+                    if isinstance(gpu_data, dict):
+                        gpu_data = [gpu_data]
+                    
+                    for gpu in gpu_data:
+                        gpu_name = gpu.get("Name", "")
+                        if gpu_name and ("AMD" in gpu_name or "Radeon" in gpu_name):
+                            adapter_ram = gpu.get("AdapterRAM", 0)
+                            
+                            # Method 1: Try to use AdapterRAM if it's reasonable
+                            if adapter_ram and adapter_ram > 1000000000:  # > 1GB in bytes
+                                vram_mb = adapter_ram // (1024 * 1024)
+                                # Cap unreasonable values (WMI sometimes reports system RAM)
+                                if vram_mb > 32768:  # > 32GB
+                                    vram_mb = 24576  # Default to 24GB for high-end AMD
+                            else:
+                                # Method 2: Intelligent defaults based on GPU model name
+                                vram_mb = self._estimate_vram_from_gpu_name(gpu_name)
+                            
+                            devices.append({
+                                "index": len(devices),
+                                "name": gpu_name,
+                                "memory_total_mb": vram_mb,
+                                "memory_used_mb": 0,  # Can't get usage via WMI
+                                "memory_free_mb": vram_mb,  # Assume free since can't detect usage
+                                "memory_utilization_percent": 0.0,
+                                "temperature_c": None,
+                                "gpu_utilization_percent": None,
+                                "memory_bandwidth_utilization_percent": None,
+                                "raw_adapter_ram": adapter_ram,
+                                "detection_method": "WMI_enhanced"
+                            })
+                    
+                    if devices:
+                        total_vram = sum(d["memory_total_mb"] for d in devices)
+                        return {
+                            "available": True,
+                            "count": len(devices),
+                            "devices": devices,
+                            "backend": "vulkan"
+                        }
+                        
+                except json.JSONDecodeError as e:
+                    logger.debug(f"Failed to parse enhanced GPU JSON: {e}")
+            
+            # Method 2: Fallback to vulkaninfo if WMI fails
+            try:
+                result = subprocess.run(["vulkaninfo", "--summary"], 
+                                      capture_output=True, text=True, timeout=10,
+                                      creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                if result.returncode == 0:
+                    vulkan_output = result.stdout
+                    devices = []
+                    
+                    # Parse vulkaninfo for device names and estimate VRAM
+                    lines = vulkan_output.split('\n')
+                    for line in lines:
+                        if "deviceName" in line:
+                            device_name = line.split('=')[-1].strip()
+                            if "AMD" in device_name or "Radeon" in device_name:
+                                vram_mb = self._estimate_vram_from_gpu_name(device_name)
+                                devices.append({
+                                    "index": len(devices),
+                                    "name": device_name,
+                                    "memory_total_mb": vram_mb,
+                                    "memory_used_mb": 0,
+                                    "memory_free_mb": vram_mb,
+                                    "memory_utilization_percent": 0.0,
+                                    "temperature_c": None,
+                                    "gpu_utilization_percent": None,
+                                    "memory_bandwidth_utilization_percent": None,
+                                    "detection_method": "vulkaninfo"
+                                })
+                    
+                    if devices:
+                        return {
+                            "available": True,
+                            "count": len(devices),
+                            "devices": devices,
+                            "backend": "vulkan"
+                        }
+            except FileNotFoundError:
+                logger.debug("vulkaninfo not available for fallback detection")
+            
+            return {"available": False, "count": 0, "devices": []}
+            
+        except Exception as e:
+            logger.debug(f"Error getting Vulkan GPU stats: {e}")
+            return {"available": False, "count": 0, "devices": []}
+    
+    def _estimate_vram_from_gpu_name(self, gpu_name: str) -> int:
+        """Estimate VRAM in MB based on GPU model name"""
+        gpu_name_lower = gpu_name.lower()
+        
+        # AMD Radeon RX 7000 series (RDNA3)
+        if "7900 xtx" in gpu_name_lower or "7900xtx" in gpu_name_lower:
+            return 24576  # 24GB
+        elif "7900 xt" in gpu_name_lower or "7900xt" in gpu_name_lower:
+            return 20480  # 20GB  
+        elif "7800 xt" in gpu_name_lower or "7800xt" in gpu_name_lower:
+            return 16384  # 16GB
+        elif "7700 xt" in gpu_name_lower or "7700xt" in gpu_name_lower:
+            return 12288  # 12GB
+        elif "7600" in gpu_name_lower:
+            return 8192   # 8GB
+        
+        # AMD Radeon RX 6000 series (RDNA2)
+        elif "6950 xt" in gpu_name_lower:
+            return 16384  # 16GB
+        elif "6900 xt" in gpu_name_lower:
+            return 16384  # 16GB
+        elif "6800 xt" in gpu_name_lower:
+            return 16384  # 16GB
+        elif "6800" in gpu_name_lower:
+            return 16384  # 16GB
+        elif "6700 xt" in gpu_name_lower:
+            return 12288  # 12GB
+        elif "6600 xt" in gpu_name_lower:
+            return 8192   # 8GB
+        elif "6600" in gpu_name_lower:
+            return 8192   # 8GB
+        elif "6500 xt" in gpu_name_lower:
+            return 4096   # 4GB
+        elif "6400" in gpu_name_lower:
+            return 4096   # 4GB
+        
+        # AMD Radeon RX 5000 series (RDNA)
+        elif "5700 xt" in gpu_name_lower:
+            return 8192   # 8GB
+        elif "5700" in gpu_name_lower:
+            return 8192   # 8GB
+        elif "5600 xt" in gpu_name_lower:
+            return 6144   # 6GB
+        elif "5500 xt" in gpu_name_lower:
+            return 8192   # 8GB (or 4GB variant)
+        
+        # Generic AMD detection
+        elif "amd" in gpu_name_lower or "radeon" in gpu_name_lower:
+            # Conservative default for unknown AMD GPUs
+            if any(high_end in gpu_name_lower for high_end in ["xt", "pro", "vega", "fury"]):
+                return 16384  # 16GB for high-end unknown
+            else:
+                return 8192   # 8GB for mid-range unknown
+        
+        # NVIDIA cards (fallback)
+        elif "rtx 4090" in gpu_name_lower:
+            return 24576  # 24GB
+        elif "rtx 4080" in gpu_name_lower:
+            return 16384  # 16GB
+        elif "rtx 4070" in gpu_name_lower:
+            return 12288  # 12GB
+        elif "rtx 3090" in gpu_name_lower:
+            return 24576  # 24GB
+        elif "rtx 3080" in gpu_name_lower:
+            return 10240  # 10GB
+        
+        # Default fallback for completely unknown GPUs
+        else:
+            logger.warning(f"Unknown GPU model '{gpu_name}', defaulting to 8GB VRAM estimate")
+            return 8192   # 8GB conservative default
+    
+    async def get_current_vram_usage(self) -> float:
+        """Get current VRAM usage in GB"""
+        try:
+            stats = await self.get_gpu_stats()
+            if stats.get("available", False) and stats.get("devices"):
+                # Return the highest used memory across all GPUs
+                max_used_mb = max(device.get("memory_used_mb", 0) for device in stats["devices"])
+                return max_used_mb / 1024.0  # Convert to GB
+            return 0.0
+        except Exception as e:
+            logger.debug(f"Error getting current VRAM usage: {e}")
+            return 0.0
+    
+    async def predict_model_size(self, model_type: str) -> float:
+        """Predict model size in GB"""
+        size_mb = await self.predict_memory_requirement(model_type)
+        return size_mb / 1024.0  # Convert to GB
+    
+    async def get_total_vram(self) -> float:
+        """Get total VRAM in GB across all GPUs"""
+        try:
+            stats = await self.get_gpu_stats()
+            if stats.get("available", False) and stats.get("devices"):
+                total_mb = sum(device.get("memory_total_mb", 0) for device in stats["devices"])
+                return total_mb / 1024.0  # Convert to GB
+            
+            # Fallback to configured minimum
+            return self.min_vram_mb / 1024.0  # Convert to GB
+        except Exception as e:
+            logger.debug(f"Error getting total VRAM: {e}")
+            return self.min_vram_mb / 1024.0  # Convert to GB

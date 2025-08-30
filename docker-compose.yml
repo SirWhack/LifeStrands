@@ -68,27 +68,18 @@ services:
   model-service:
     build:
       context: ./services/model-service
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.lmstudio
     container_name: lifestrands-model-service
     environment:
       - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@postgres:5432/lifestrands
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379
-      - MODELS_PATH=/models
-      - CHAT_MODEL=${CHAT_MODEL:-Gryphe_Codex-24B-Small-3.2-Q6_K_L.gguf}
-      - SUMMARY_MODEL=${SUMMARY_MODEL:-dphn.Dolphin-Mistral-24B-Venice-Edition.Q6_K.gguf}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2.F32.gguf}
-      - MIN_VRAM_MB=${MIN_VRAM_MB:-8000}
-      - CHAT_CONTEXT_SIZE=${CHAT_CONTEXT_SIZE:-8192}
-      - SUMMARY_CONTEXT_SIZE=${SUMMARY_CONTEXT_SIZE:-4096}
+      - LM_STUDIO_MODE=true
+      - MOCK_MODE=false
+      - LM_STUDIO_BASE_URL=http://host.docker.internal:1234
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - HSA_OVERRIDE_GFX_VERSION=11.0.0
-      - HIP_VISIBLE_DEVICES=0
-      - HIP_PLATFORM=amd
-      - ROCR_VISIBLE_DEVICES=0
     ports:
       - "8001:8001"
     volumes:
-      - ./Models:/models:ro
       - logs-data:/app/logs
     networks:
       lifestrands-network:
@@ -99,13 +90,15 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${MODEL_SERVICE_MEMORY_LIMIT:-16384m}
-          cpus: '${MODEL_SERVICE_CPU_LIMIT:-4}'
+          memory: ${MODEL_SERVICE_MEMORY_LIMIT:-1024m}  # Much smaller since no GPU/models
+          cpus: '${MODEL_SERVICE_CPU_LIMIT:-1}'
     restart: unless-stopped
-    # GPU access - commented out until ROCm drivers installed
-    # devices:
-    #   - /dev/kfd:/dev/kfd
-    #   - /dev/dri:/dev/dri
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   chat-service:
     build:
@@ -115,7 +108,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@postgres:5432/lifestrands
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379
-      - MODEL_SERVICE_URL=http://host.docker.internal:8001
+      - MODEL_SERVICE_URL=http://model-service:8001
       - NPC_SERVICE_URL=http://npc-service:8003
       - MAX_CONCURRENT_CONVERSATIONS=${MAX_CONCURRENT_CONVERSATIONS:-50}
       - CONVERSATION_TIMEOUT_MINUTES=${CONVERSATION_TIMEOUT_MINUTES:-30}
@@ -288,63 +281,6 @@ services:
       - gateway
     restart: unless-stopped
 
-  # ================================
-  # Monitoring Stack (Optional)
-  # ================================
-
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: lifestrands-prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
-      - '--web.enable-lifecycle'
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.40
-    restart: unless-stopped
-    profiles: ["monitoring"]
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: lifestrands-grafana
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_INSTALL_PLUGINS=grafana-piechart-panel
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
-      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
-    networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.41
-    depends_on:
-      - prometheus
-    restart: unless-stopped
-    profiles: ["monitoring"]
-
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    container_name: lifestrands-jaeger
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
-    ports:
-      - "16686:16686"  # Jaeger UI
-      - "14268:14268"  # Jaeger collector
-    networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.42
-    restart: unless-stopped
-    profiles: ["monitoring"]
 
   # ================================
   # Development Tools (Optional)
@@ -354,9 +290,10 @@ services:
     image: dpage/pgadmin4:latest
     container_name: lifestrands-pgadmin
     environment:
-      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@lifestrands.com}
+      - PGADMIN_DEFAULT_EMAIL=admin@example.com
       - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin123}
       - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_CONFIG_CHECK_EMAIL_DELIVERABILITY=False
     ports:
       - "8080:80"
     volumes:
@@ -397,7 +334,7 @@ services:
       - REACT_APP_API_URL=http://localhost:8000
       - REACT_APP_WS_URL=ws://localhost:8000
     ports:
-      - "3001:3000"
+      - "3000:3000"
     networks:
       lifestrands-network:
         ipv4_address: 172.20.0.60

@@ -68,7 +68,12 @@ class ModelManager:
         # Auto-detect models path based on platform
         if self.is_windows:
             # Windows native mode - look for Models directory relative to project root
-            models_path = os.getenv("MODELS_PATH", str(Path(__file__).parent.parent.parent.parent / "Models"))
+            # __file__ = /path/to/Life Strands v2/services/model-service/src/model_manager.py
+            # We need to go up 3 levels: src -> model-service -> services -> Life Strands v2
+            project_root = Path(__file__).parent.parent.parent.parent.resolve()
+            models_path_env = os.getenv("MODELS_PATH")
+            logger.info(f"Environment MODELS_PATH: {models_path_env}")
+            models_path = os.getenv("MODELS_PATH", str(project_root / "Models"))
         else:
             # Docker/Linux mode - use container path
             models_path = os.getenv("MODELS_PATH", "/models")
@@ -77,9 +82,24 @@ class ModelManager:
         summary_model = os.getenv("SUMMARY_MODEL", "dphn.Dolphin-Mistral-24B-Venice-Edition.Q6_K.gguf")
         embedding_model = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2.F32.gguf")
         
-        self.models_path = Path(models_path)
+        self.models_path = Path(models_path).resolve()
         logger.info(f"Platform: {'Windows' if self.is_windows else 'Linux/Docker'}")
         logger.info(f"Models path: {self.models_path}")
+        logger.info(f"Current working directory: {os.getcwd()}")
+        logger.info(f"Resolved models path: {self.models_path.absolute()}")
+        logger.info(f"__file__ location: {__file__}")
+        logger.info(f"Calculated project_root: {Path(__file__).parent.parent.parent.parent.resolve()}")
+        
+        # Validate models directory exists
+        if not self.models_path.exists():
+            logger.error(f"Models directory does not exist: {self.models_path}")
+            logger.error(f"Please ensure the Models directory exists at the correct path")
+        elif not self.models_path.is_dir():
+            logger.error(f"Models path is not a directory: {self.models_path}")
+        else:
+            # List available model files
+            model_files = [f.name for f in self.models_path.iterdir() if f.is_file() and f.suffix == '.gguf']
+            logger.info(f"Found {len(model_files)} GGUF model files: {model_files[:5]}{'...' if len(model_files) > 5 else ''}")
         
         # Model configurations with Windows-optimized settings
         if self.is_windows:

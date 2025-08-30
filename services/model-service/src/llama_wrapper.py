@@ -177,6 +177,46 @@ class LlamaWrapper:
         except Exception as e:
             logger.error(f"Error generating tokens: {e}")
             raise
+
+    async def generate_embeddings(self, texts: list) -> list:
+        """Generate embeddings for a list of texts"""
+        try:
+            if not self.model:
+                raise RuntimeError("No model loaded")
+            
+            if not hasattr(self.model, 'embed') and not hasattr(self.model, 'create_embedding'):
+                logger.warning("Model does not support embeddings, using fallback")
+                # Return dummy embeddings for compatibility
+                embedding_size = 384  # Common size for sentence transformers
+                return [[0.0] * embedding_size for _ in texts]
+            
+            embeddings = []
+            for text in texts:
+                try:
+                    # Try different embedding methods
+                    if hasattr(self.model, 'embed'):
+                        embedding = self.model.embed(text)
+                    elif hasattr(self.model, 'create_embedding'):
+                        result = self.model.create_embedding(text)
+                        embedding = result['data'][0]['embedding'] if 'data' in result else result
+                    else:
+                        # Fallback to tokenization-based approach
+                        tokens = self.tokenize(text)
+                        # Simple average of token embeddings (placeholder)
+                        embedding = [0.0] * 384
+                    
+                    embeddings.append(embedding)
+                    
+                except Exception as e:
+                    logger.warning(f"Error generating embedding for text: {e}")
+                    # Fallback embedding
+                    embeddings.append([0.0] * 384)
+            
+            return embeddings
+            
+        except Exception as e:
+            logger.error(f"Error generating embeddings: {e}")
+            raise
             
     def adjust_parameters(self, params: dict):
         """Dynamically adjust generation parameters"""

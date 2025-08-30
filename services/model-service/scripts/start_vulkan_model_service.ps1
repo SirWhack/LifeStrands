@@ -28,7 +28,7 @@ $env:VK_ICD_FILENAMES = ""  # Let system auto-detect
 $env:VULKAN_SDK = $env:VULKAN_SDK  # Preserve if set
 
 Write-Host "[INFO] Setting model service environment..." -ForegroundColor Blue
-$env:MODELS_PATH = Join-Path $PWD "Models"
+$env:MODELS_PATH = "D:\AI\Life Strands v2\Models"
 $env:REDIS_URL = "redis://localhost:6379"
 $env:DATABASE_URL = "postgresql://lifestrands_user:lifestrands_password@localhost:5432/lifestrands"
 $env:CHAT_MODEL = "Gryphe_Codex-24B-Small-3.2-Q6_K_L.gguf"

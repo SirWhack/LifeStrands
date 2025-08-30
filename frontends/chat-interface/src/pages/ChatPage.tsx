@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Container,
@@ -26,8 +26,8 @@ import {
   Refresh as RefreshIcon,
   Stop as StopIcon
 } from '@mui/icons-material';
-import { useWebSocket, useConversationWebSocket } from '../hooks/useWebSocket';
-import { useNPC, useNPCConversation } from '../hooks/useNPC';
+import { useWebSocket } from '../hooks/useWebSocket';
+import { useNPC } from '../hooks/useNPC';
 
 interface Message {
   id: string;
@@ -46,26 +46,31 @@ const ChatPage: React.FC = () => {
     apiBaseUrl: 'http://localhost:8003'
   });
 
-  // Conversation Management
-  const { 
-    conversationHistory, 
-    currentConversationId,
-    startConversation,
-    endConversation,
-    sendMessage: sendAPIMessage,
-    setConversationHistory,
-    loading: conversationLoading,
-    error: conversationError
-  } = useNPCConversation(currentNPC?.id || null);
+  // WebSocket for real-time chat - single persistent connection
+  const webSocketOptions = useMemo(() => ({
+    url: 'ws://localhost:8002/ws',
+    shouldReconnect: true,
+    onMessage: (message) => {
+      console.log('Received WebSocket message:', message);
+    },
+    onError: (error) => {
+      console.error('WebSocket connection error:', error);
+    },
+    onOpen: () => {
+      console.log('WebSocket connected successfully');
+    },
+    onClose: (event) => {
+      console.log('WebSocket disconnected:', event.code, event.reason);
+    }
+  }), []);
 
-  // WebSocket for real-time chat
   const {
     connectionState,
     sendMessage: sendWSMessage,
     lastMessage,
     connectionError,
     isTyping
-  } = useConversationWebSocket(currentConversationId);
+  } = useWebSocket(webSocketOptions);
 
   // Local state
   const [messages, setMessages] = useState<Message[]>([]);
@@ -88,40 +93,41 @@ const ChatPage: React.FC = () => {
 
   // Handle NPC selection
   const handleNPCChange = useCallback(async (npcId: string) => {
+    console.log('🔄 NPC Selection started:', npcId);
     if (!npcId) return;
     
     setSelectedNPCId(npcId);
+    console.log('📡 Fetching NPC details...');
     const npc = await fetchNPC(npcId);
     if (npc) {
+      console.log('✅ NPC fetched:', npc.name);
       setCurrentNPC(npc);
       navigate(`/chat/${npcId}`);
       
-      // Start a new conversation
-      if (currentConversationId) {
-        await endConversation();
-      }
-      
+      // Clear messages for new NPC conversation
       setMessages([]);
       setStreamingMessage('');
       
-      // Auto-start conversation
-      const conversation = await startConversation('default-user');
-      if (conversation) {
-        console.log('Started conversation:', conversation.id);
-      }
+      console.log('✅ NPC selection complete - WebSocket will handle conversation automatically');
+    } else {
+      console.error('❌ Failed to fetch NPC');
     }
-  }, [fetchNPC, setCurrentNPC, navigate, currentConversationId, endConversation, startConversation]);
+  }, [fetchNPC, setCurrentNPC, navigate]);
 
   // Handle WebSocket messages
-  useEffect(() => {
-    if (!lastMessage) return;
+  const handleWebSocketMessage = useCallback((message: any) => {
+    if (!message) return;
 
-    console.log('Received WebSocket message:', lastMessage);
+    console.log('Received WebSocket message:', message);
 
-    switch (lastMessage.type) {
-      case 'message':
-        // Complete message received
-        if (streamingMessageRef.current) {
+    switch (message.type) {
+      case 'connection_ready':
+        console.log('✅ WebSocket connection ready');
+        break;
+        
+      case 'response_complete':
+        // Complete message received for current NPC
+        if (streamingMessageRef.current && (!message.npc_id || message.npc_id === currentNPC?.id)) {
           setMessages(prev => [...prev, {
             id: Date.now().toString(),
             sender: 'npc',
@@ -134,33 +140,33 @@ const ChatPage: React.FC = () => {
         setIsGenerating(false);
         break;
         
-      case 'token':
-        // Streaming token received
-        const token = lastMessage.data?.token || '';
-        streamingMessageRef.current += token;
-        setStreamingMessage(streamingMessageRef.current);
+      case 'response_chunk':
+        // Streaming token received for current NPC
+        if (!message.npc_id || message.npc_id === currentNPC?.id) {
+          const chunk = message.chunk || '';
+          streamingMessageRef.current += chunk;
+          setStreamingMessage(streamingMessageRef.current);
+        }
         break;
         
-      case 'generation_start':
-        setIsGenerating(true);
-        streamingMessageRef.current = '';
-        setStreamingMessage('');
-        break;
-        
-      case 'generation_complete':
-        setIsGenerating(false);
+      case 'pong':
+        // Keep alive response - no action needed
         break;
         
       case 'error':
-        console.error('WebSocket error:', lastMessage.error);
+        console.error('WebSocket error:', message.message);
         setIsGenerating(false);
         break;
     }
-  }, [lastMessage]);
+  }, [currentNPC?.id]);
+
+  useEffect(() => {
+    handleWebSocketMessage(lastMessage);
+  }, [lastMessage, handleWebSocketMessage]);
 
   // Send message
   const handleSendMessage = useCallback(async () => {
-    if (!inputMessage.trim() || !currentNPC || !currentConversationId) return;
+    if (!inputMessage.trim() || !currentNPC) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -171,18 +177,16 @@ const ChatPage: React.FC = () => {
 
     setMessages(prev => [...prev, userMessage]);
     
-    // Send via WebSocket for real-time response
+    // Send via WebSocket with NPC ID for routing
     sendWSMessage({
-      type: 'user_message',
-      data: {
-        message: inputMessage.trim(),
-        conversation_id: currentConversationId
-      }
+      type: 'message',
+      npc_id: currentNPC.id,
+      content: inputMessage.trim()
     });
 
     setInputMessage('');
     setIsGenerating(true);
-  }, [inputMessage, currentNPC, currentConversationId, sendWSMessage]);
+  }, [inputMessage, currentNPC, sendWSMessage]);
 
   // Handle Enter key
   const handleKeyPress = (event: React.KeyboardEvent) => {
@@ -270,14 +274,14 @@ const ChatPage: React.FC = () => {
         {/* Messages */}
         <Box sx={{ flexGrow: 1, overflow: 'auto', p: 2 }}>
           {/* Error Messages */}
-          {(npcError || conversationError || connectionError) && (
+          {(npcError || connectionError) && (
             <Alert severity="error" sx={{ mb: 2 }}>
-              {npcError || conversationError || connectionError}
+              {npcError || connectionError}
             </Alert>
           )}
 
           {/* Loading */}
-          {(npcLoading || conversationLoading) && (
+          {npcLoading && (
             <Box display="flex" justifyContent="center" p={2}>
               <CircularProgress />
             </Box>
@@ -398,13 +402,13 @@ const ChatPage: React.FC = () => {
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
               onKeyPress={handleKeyPress}
-              disabled={!currentNPC || !currentConversationId || isGenerating}
+              disabled={!currentNPC || connectionState !== 'connected' || isGenerating}
             />
             <Button
               variant="contained"
               endIcon={isGenerating ? <StopIcon /> : <SendIcon />}
               onClick={handleSendMessage}
-              disabled={!inputMessage.trim() || !currentNPC || !currentConversationId}
+              disabled={!inputMessage.trim() || !currentNPC || connectionState !== 'connected'}
               sx={{ minWidth: 100 }}
             >
               {isGenerating ? 'Stop' : 'Send'}
@@ -412,11 +416,10 @@ const ChatPage: React.FC = () => {
           </Box>
 
           {/* Status */}
-          {currentConversationId && (
-            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-              Conversation ID: {currentConversationId} • Connection: {connectionState}
-            </Typography>
-          )}
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+            Connection: {connectionState}
+            {currentNPC && ` • Chatting with ${currentNPC.name}`}
+          </Typography>
         </Box>
       </Paper>
 

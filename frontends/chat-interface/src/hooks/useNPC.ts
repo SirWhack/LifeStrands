@@ -125,7 +125,7 @@ export const useNPC = (options: UseNPCOptions = {}): UseNPCReturn => {
     setError(null);
 
     try {
-      const response = await fetch(`${apiBaseUrl}/npcs/${id}`, {
+      const response = await fetch(`${apiBaseUrl}/npc/${id}`, {
         headers: apiHeaders
       });
 
@@ -178,7 +178,7 @@ export const useNPC = (options: UseNPCOptions = {}): UseNPCReturn => {
     setError(null);
 
     try {
-      const response = await fetch(`${apiBaseUrl}/npcs/${id}`, {
+      const response = await fetch(`${apiBaseUrl}/npc/${id}`, {
         method: 'PUT',
         headers: apiHeaders,
         body: JSON.stringify(updates)
@@ -212,7 +212,7 @@ export const useNPC = (options: UseNPCOptions = {}): UseNPCReturn => {
     setError(null);
 
     try {
-      const response = await fetch(`${apiBaseUrl}/npcs/${id}`, {
+      const response = await fetch(`${apiBaseUrl}/npc/${id}`, {
         method: 'DELETE',
         headers: apiHeaders
       });
@@ -296,13 +296,18 @@ export const useNPCConversation = (npcId: string | null) => {
   const [error, setError] = useState<string | null>(null);
 
   const startConversation = useCallback(async (userId: string, authToken?: string) => {
-    if (!npcId) return null;
+    console.log('🚀 startConversation called with npcId:', npcId, 'userId:', userId);
+    if (!npcId) {
+      console.error('❌ No npcId provided to startConversation');
+      return null;
+    }
 
     setLoading(true);
     setError(null);
 
     try {
-      const response = await fetch('http://localhost:8000/api/conversations', {
+      console.log('📡 Sending conversation start request...');
+      const response = await fetch('http://localhost:8002/conversation/start', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -314,12 +319,16 @@ export const useNPCConversation = (npcId: string | null) => {
         })
       });
 
+      console.log('📥 Conversation start response status:', response.status);
+
       if (!response.ok) {
         throw new Error(`Failed to start conversation: ${response.status}`);
       }
 
       const conversation = await response.json();
-      setCurrentConversationId(conversation.id);
+      console.log('✅ Conversation response:', conversation);
+      setCurrentConversationId(conversation.session_id);
+      console.log('🆔 Set conversation ID:', conversation.session_id);
       return conversation;
     } catch (err: any) {
       setError(err.message);
@@ -334,7 +343,7 @@ export const useNPCConversation = (npcId: string | null) => {
     if (!currentConversationId) return;
 
     try {
-      await fetch(`http://localhost:8000/api/conversations/${currentConversationId}/end`, {
+      await fetch(`http://localhost:8002/conversation/${currentConversationId}/end`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -353,15 +362,15 @@ export const useNPCConversation = (npcId: string | null) => {
     if (!currentConversationId) return null;
 
     try {
-      const response = await fetch(`http://localhost:8000/api/conversations/${currentConversationId}/messages`, {
+      const response = await fetch(`http://localhost:8002/conversation/send`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(authToken && { 'Authorization': `Bearer ${authToken}` })
         },
         body: JSON.stringify({
-          message,
-          sender: 'user'
+          session_id: currentConversationId,
+          message
         })
       });
 

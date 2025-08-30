@@ -1,10 +1,20 @@
-fastapi==0.104.1
-uvicorn==0.24.0
-redis==5.0.1
-psutil==5.9.6
-GPUtil==1.4.0
-numpy==1.25.2
-llama-cpp-python==0.2.20
-pydantic==2.5.0
+# Core FastAPI dependencies
+fastapi==0.116.1
+uvicorn==0.35.0
+pydantic==2.11.7
 python-multipart==0.0.6
-aiofiles==23.2.1
+
+# HTTP client for LM Studio
+aiohttp==3.12.15
+
+# Redis for caching (optional in LM Studio mode)
+redis==5.1.1
+
+# System monitoring (optional)
+psutil==5.9.6
+
+# Legacy dependencies (only needed for native GPU mode)
+# GPUtil==1.4.0
+# numpy==1.25.2
+# llama-cpp-python==0.2.20
+# aiofiles==23.2.1
