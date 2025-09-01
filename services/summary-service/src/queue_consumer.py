@@ -13,7 +13,8 @@ class QueueConsumer:
     
     def __init__(self, redis_url: str = None):
         import os
-        self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379")
+        # Use localhost by default for native/dev runs; docker provides REDIS_URL
+        self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379")
         self.redis_client: Optional[redis.Redis] = None
         self.is_running = False
         self.consumer_tasks = []
@@ -195,7 +196,19 @@ class QueueConsumer:
                 session_id, summary, key_points, emotional_impact, changes
             )
             
-            # Step 9: Notify completion
+            # Step 9: Log all changes made to NPC
+            await self._log_npc_changes(session_id, npc_id, {
+                "summary": summary,
+                "key_points": key_points,
+                "emotional_impact": emotional_impact,
+                "total_changes_analyzed": len(changes),
+                "auto_approved_changes": len(auto_approved_changes),
+                "changes_applied": auto_approved_changes,
+                "memory_added": bool(memory_entry),
+                "memory_content": memory_entry.get("content", "") if memory_entry else ""
+            })
+            
+            # Step 10: Notify completion
             await self.notify_completion(session_id)
             
             # Increment processed counter
@@ -274,29 +287,18 @@ class QueueConsumer:
             logger.error(f"Error sending completion notification: {e}")
             
     def _filter_auto_approved_changes(self, changes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Filter changes that can be auto-approved"""
+        """Filter changes that can be auto-approved - permissive for fictional NPCs"""
         try:
             auto_approved = []
-            confidence_threshold = 0.8
+            confidence_threshold = 0.6  # Lowered threshold for more dynamic NPCs
             
             for change in changes:
                 confidence = change.get("confidence_score", 0)
-                change_type = change.get("change_type")
                 
-                # Auto-approve high confidence changes of certain types
+                # Auto-approve most changes above confidence threshold
+                # No content filtering - this is a fictional world
                 if confidence >= confidence_threshold:
-                    if change_type in [
-                        "memory_added", 
-                        "knowledge_learned", 
-                        "emotional_impact"
-                    ]:
-                        auto_approved.append(change)
-                        
-                    elif change_type == "status_updated":
-                        # Auto-approve status changes for mood and activity
-                        field = change.get("change_data", {}).get("field")
-                        if field in ["mood", "activity"]:
-                            auto_approved.append(change)
+                    auto_approved.append(change)
                             
             logger.debug(f"Auto-approved {len(auto_approved)} out of {len(changes)} changes")
             return auto_approved
@@ -539,3 +541,128 @@ class QueueConsumer:
         except Exception as e:
             logger.error(f"Error retrying failed jobs: {e}")
             return 0
+            
+    async def _log_npc_changes(self, session_id: str, npc_id: str, change_data: Dict[str, Any]):
+        """Log comprehensive summary of all changes made to an NPC"""
+        try:
+            # Get NPC name for readable logging
+            npc_data = await self._get_npc_data(npc_id)
+            npc_name = npc_data.get("name", "Unknown NPC")
+            
+            # Build comprehensive log entry
+            log_entry = f"\n{'='*80}\n"
+            log_entry += f"🎭 NPC EVOLUTION COMPLETE - {npc_name} ({npc_id})\n"
+            log_entry += f"{'='*80}\n"
+            log_entry += f"Session ID: {session_id}\n"
+            log_entry += f"Timestamp: {datetime.utcnow().isoformat()}\n\n"
+            
+            # Conversation Summary
+            log_entry += f"📝 CONVERSATION SUMMARY:\n"
+            log_entry += f"{change_data.get('summary', 'No summary available')}\n\n"
+            
+            # Key Points
+            key_points = change_data.get('key_points', [])
+            if key_points:
+                log_entry += f"🔑 KEY MOMENTS:\n"
+                for i, point in enumerate(key_points, 1):
+                    log_entry += f"  {i}. {point}\n"
+                log_entry += "\n"
+            
+            # Emotional Impact
+            emotional_impact = change_data.get('emotional_impact', {})
+            if emotional_impact:
+                log_entry += f"💭 EMOTIONAL IMPACT:\n"
+                log_entry += f"  Impact: {emotional_impact.get('emotional_impact', 'neutral')}\n"
+                log_entry += f"  Intensity: {emotional_impact.get('intensity', 5)}/10\n"
+                emotions = emotional_impact.get('primary_emotions', [])
+                if emotions:
+                    log_entry += f"  Emotions: {', '.join(emotions)}\n"
+                log_entry += f"  Confidence: {emotional_impact.get('confidence', 0):.2f}\n\n"
+            
+            # Changes Applied
+            changes_applied = change_data.get('changes_applied', [])
+            if changes_applied:
+                log_entry += f"🔄 CHANGES APPLIED ({len(changes_applied)} total):\n"
+                
+                # Group changes by type for better readability
+                change_groups = {}
+                for change in changes_applied:
+                    change_type = change.get('change_type', 'unknown')
+                    if change_type not in change_groups:
+                        change_groups[change_type] = []
+                    change_groups[change_type].append(change)
+                
+                for change_type, group_changes in change_groups.items():
+                    log_entry += f"\n  📋 {change_type.upper().replace('_', ' ')} ({len(group_changes)} changes):\n"
+                    
+                    for change in group_changes:
+                        change_data_detail = change.get('change_data', {})
+                        confidence = change.get('confidence_score', 0)
+                        summary = change.get('change_summary', 'No summary')
+                        
+                        log_entry += f"    • {summary} (confidence: {confidence:.2f})\n"
+                        
+                        # Add specific details based on change type
+                        if change_type == 'personality_changed':
+                            item = change_data_detail.get('item', '')
+                            reasoning = change_data_detail.get('reasoning', '')
+                            log_entry += f"      → {item}: {reasoning}\n"
+                            
+                        elif change_type == 'relationship_updated':
+                            person = change_data_detail.get('person', '')
+                            rel_type = change_data_detail.get('type', '')
+                            status = change_data_detail.get('status', '')
+                            intensity = change_data_detail.get('intensity', 5)
+                            notes = change_data_detail.get('notes', '')
+                            log_entry += f"      → {person} ({rel_type}): {status} intensity {intensity}\n"
+                            if notes:
+                                log_entry += f"        Reason: {notes}\n"
+                                
+                        elif change_type == 'status_updated':
+                            field = change_data_detail.get('field', '')
+                            old_value = change_data_detail.get('old_value', '')
+                            new_value = change_data_detail.get('new_value', '')
+                            reasoning = change_data_detail.get('reasoning', '')
+                            log_entry += f"      → {field}: '{old_value}' → '{new_value}'\n"
+                            if reasoning:
+                                log_entry += f"        Reason: {reasoning}\n"
+                
+                log_entry += "\n"
+            else:
+                log_entry += f"🔄 CHANGES APPLIED: None (no changes met approval threshold)\n\n"
+            
+            # Memory Added
+            memory_added = change_data.get('memory_added', False)
+            memory_content = change_data.get('memory_content', '')
+            if memory_added and memory_content:
+                log_entry += f"🧠 NEW MEMORY ADDED:\n"
+                log_entry += f"  \"{memory_content}\"\n\n"
+            elif memory_added:
+                log_entry += f"🧠 NEW MEMORY ADDED: (content not available)\n\n"
+            else:
+                log_entry += f"🧠 NEW MEMORY ADDED: None\n\n"
+            
+            # Statistics
+            total_analyzed = change_data.get('total_changes_analyzed', 0)
+            auto_approved = change_data.get('auto_approved_changes', 0)
+            log_entry += f"📊 PROCESSING STATS:\n"
+            log_entry += f"  Changes Analyzed: {total_analyzed}\n"
+            log_entry += f"  Auto-Approved: {auto_approved}\n"
+            log_entry += f"  Approval Rate: {(auto_approved/max(1,total_analyzed)*100):.1f}%\n"
+            
+            log_entry += f"{'='*80}\n"
+            
+            # Log at INFO level for visibility
+            logger.info(log_entry)
+            
+            # Also store detailed change log in Redis for later retrieval
+            await self.redis_client.set(
+                f"npc_change_log:{session_id}",
+                log_entry,
+                ex=86400 * 30  # 30 days retention
+            )
+            
+        except Exception as e:
+            logger.error(f"Error logging NPC changes for session {session_id}: {e}")
+            # Fallback simple log
+            logger.info(f"🎭 NPC {npc_id} evolved through session {session_id} - detailed logging failed")

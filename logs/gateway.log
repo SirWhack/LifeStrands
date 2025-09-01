@@ -1,0 +1,263 @@
+INFO:     Will watch for changes in these directories: ['/home/swynn/Code/LifeStrands/services/gateway-service']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [25501] using StatReload
+WARNING:src.auth:AUTH_JWT_SECRET not set; generating ephemeral dev secret
+INFO:src.auth:Created default dev users and service API key (hidden)
+INFO:     Started server process [25504]
+INFO:     Waiting for application startup.
+INFO:src.auth:Initializing AuthManager...
+INFO:src.auth:AuthManager initialized successfully
+INFO:src.router:Initializing APIRouter...
+INFO:src.router:APIRouter initialized successfully
+INFO:main:Gateway service started successfully
+INFO:     Application startup complete.
+INFO:     127.0.0.1:36774 - "GET /api/npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49140 - "GET / HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:49146 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:49162 - "GET /api HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:49176 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:49162 - "GET /api/npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49176 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:47058 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47058 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47058 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47058 - "OPTIONS /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47058 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48410 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48410 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48410 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48410 - "OPTIONS /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48410 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33704 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33704 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33704 - "OPTIONS /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33704 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50370 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50370 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50370 - "OPTIONS /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50370 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50370 - "OPTIONS /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50370 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41472 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41472 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 38848) - "WebSocket /ws?token=test_token" [accepted]
+INFO:     connection open
+INFO:main:WebSocket proxy connection established
+ERROR:main:Error proxying from chat service: received 1000 (OK); then sent 1000 (OK)
+INFO:     connection closed
+INFO:     127.0.0.1:56778 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38298 - "GET /health HTTP/1.1" 200 OK
+WARNING:  StatReload detected changes in 'main.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:main:Gateway service shut down
+INFO:     Application shutdown complete.
+INFO:     Finished server process [25504]
+ERROR:asyncio:Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x75a3a5325340>
+WARNING:src.auth:AUTH_JWT_SECRET not set; generating ephemeral dev secret
+INFO:src.auth:Created default dev users and service API key (hidden)
+INFO:     Started server process [30482]
+INFO:     Waiting for application startup.
+INFO:src.auth:Initializing AuthManager...
+INFO:src.auth:AuthManager initialized successfully
+INFO:src.router:Initializing APIRouter...
+INFO:src.router:APIRouter initialized successfully
+INFO:main:Gateway service started successfully
+INFO:     Application startup complete.
+INFO:     ('127.0.0.1', 42506) - "WebSocket /ws?token=test_token" [accepted]
+INFO:     connection open
+ERROR:main:WebSocket proxy error: 
+INFO:     connection closed
+INFO:     127.0.0.1:54268 - "OPTIONS /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54268 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45504 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45504 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45504 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 60422) - "WebSocket /ws?token=test_token" [accepted]
+INFO:     connection open
+INFO:     connection closed
+ERROR:main:WebSocket proxy error: 
+INFO:     ('127.0.0.1', 56270) - "WebSocket /ws?token=test_token" [accepted]
+INFO:     connection open
+INFO:     connection closed
+ERROR:main:WebSocket proxy error: 
+INFO:     127.0.0.1:35722 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35722 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35722 - "OPTIONS /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35722 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42318 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42318 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42318 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42318 - "OPTIONS /npc/e2af464b-1666-4344-b2bc-12efa86f4027 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42318 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52764 - "OPTIONS /api/audio/speak HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52764 - "POST /api/audio/speak HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52764 - "POST /api/audio/speak HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52764 - "POST /api/audio/speak HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:39014 - "OPTIONS /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39014 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44804 - "OPTIONS /npc/94ea82b2-323d-4fc3-ada0-eb026e62aea7 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44804 - "GET /npc/94ea82b2-323d-4fc3-ada0-eb026e62aea7 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44804 - "OPTIONS /npc/d308cf1e-dc9b-4f43-983b-7fd6c5760ed9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44804 - "GET /npc/d308cf1e-dc9b-4f43-983b-7fd6c5760ed9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44804 - "OPTIONS /npc/042b5b7f-623e-4285-a400-8012f607bcfa HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44804 - "GET /npc/042b5b7f-623e-4285-a400-8012f607bcfa HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44804 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44804 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44804 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44804 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50018 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50018 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50018 - "GET /npc/d308cf1e-dc9b-4f43-983b-7fd6c5760ed9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57296 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57296 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57296 - "GET /npc/d308cf1e-dc9b-4f43-983b-7fd6c5760ed9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57296 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57296 - "OPTIONS /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57296 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57296 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57296 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60618 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60618 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60618 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60618 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33572 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 35378) - "WebSocket /ws?token=test_token" [accepted]
+INFO:     connection open
+INFO:     connection closed
+ERROR:main:WebSocket proxy error: 
+INFO:     127.0.0.1:33644 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33644 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33644 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33644 - "OPTIONS /npc/9059322c-4630-478e-9cc6-04e7f752d922 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33644 - "GET /npc/9059322c-4630-478e-9cc6-04e7f752d922 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33644 - "OPTIONS /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33644 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57204 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57204 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57204 - "OPTIONS /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57204 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44836 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44836 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44836 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44836 - "OPTIONS /npc/9059322c-4630-478e-9cc6-04e7f752d922 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44836 - "GET /npc/9059322c-4630-478e-9cc6-04e7f752d922 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43190 - "OPTIONS /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43190 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 32992) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:     127.0.0.1:32982 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:32982 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:32982 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:32982 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+ERROR:main:WebSocket proxy error: 
+INFO:     connection closed
+INFO:     127.0.0.1:51494 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51494 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51494 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51510 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 51518) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:     127.0.0.1:51510 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51510 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+ERROR:main:WebSocket proxy error: 
+INFO:     connection closed
+INFO:     127.0.0.1:34162 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34162 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52474 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52474 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52474 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52484 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 52496) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:     127.0.0.1:52484 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52484 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     connection closed
+INFO:     127.0.0.1:52722 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 52742) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:     127.0.0.1:52722 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52722 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     connection closed
+INFO:     ('127.0.0.1', 52754) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     ('127.0.0.1', 52794) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     ('127.0.0.1', 52804) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+ERROR:main:WebSocket proxy error: 
+ERROR:main:WebSocket proxy error: 
+ERROR:main:WebSocket proxy error: 
+ERROR:main:WebSocket proxy error: 
+WARNING:  StatReload detected changes in 'main.py'. Reloading...
+INFO:     Shutting down
+INFO:     connection closed
+INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
+ERROR:main:WebSocket proxy error: 
+INFO:     Waiting for application shutdown.
+INFO:main:Gateway service shut down
+INFO:     Application shutdown complete.
+INFO:     Finished server process [30482]
+ERROR:asyncio:Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x72a3402e7410>
+WARNING:src.auth:AUTH_JWT_SECRET not set; generating ephemeral dev secret
+INFO:src.auth:Created default dev users and service API key (hidden)
+INFO:     Started server process [33731]
+INFO:     Waiting for application startup.
+INFO:src.auth:Initializing AuthManager...
+INFO:src.auth:AuthManager initialized successfully
+INFO:src.router:Initializing APIRouter...
+INFO:src.router:APIRouter initialized successfully
+INFO:main:Gateway service started successfully
+INFO:     Application startup complete.
+INFO:     127.0.0.1:50484 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 50486) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:main:WebSocket proxy connection established
+INFO:     127.0.0.1:50484 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50484 - "OPTIONS /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50484 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50484 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     connection closed
+INFO:     ('127.0.0.1', 46908) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:main:WebSocket proxy connection established
+INFO:     127.0.0.1:46950 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46950 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     connection closed
+INFO:     127.0.0.1:46962 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 46978) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:main:WebSocket proxy connection established
+INFO:     127.0.0.1:46962 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46962 - "OPTIONS /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46962 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46962 - "OPTIONS /npc/86f0d615-7830-404a-bee4-b3e5fba684c4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46962 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36686 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38206 - "OPTIONS /npc/9059322c-4630-478e-9cc6-04e7f752d922 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38206 - "GET /npc/9059322c-4630-478e-9cc6-04e7f752d922 HTTP/1.1" 200 OK
+INFO:     connection closed
+INFO:     ('127.0.0.1', 37204) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:main:WebSocket proxy connection established
+INFO:     127.0.0.1:37216 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60602 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4 HTTP/1.1" 200 OK
+INFO:     connection closed
+INFO:     ('127.0.0.1', 45838) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:main:WebSocket proxy connection established
+INFO:     connection closed
+INFO:     127.0.0.1:49798 - "OPTIONS /npcs HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 49814) - "WebSocket /ws?token=demo-jwt-token-for-development" [accepted]
+INFO:     connection open
+INFO:main:WebSocket proxy connection established
+INFO:     127.0.0.1:49798 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49798 - "OPTIONS /npc/86f0d615-7830-404a-bee4-b3e5fba684c4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49798 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36958 - "OPTIONS /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36958 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     connection closed

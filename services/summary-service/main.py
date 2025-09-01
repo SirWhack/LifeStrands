@@ -3,6 +3,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Dict, List, Any
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -18,8 +19,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Global components
-model_service_url = os.getenv("MODEL_SERVICE_URL", "http://host.docker.internal:8001")
-npc_service_url = os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
+model_service_url = os.getenv("LM_STUDIO_BASE_URL", os.getenv("MODEL_SERVICE_URL", "http://10.4.20.10:1234/v1"))
+# Pin localhost for native/dev; docker-compose sets NPC_SERVICE_URL to internal DNS
+npc_service_url = os.getenv("NPC_SERVICE_URL", "http://localhost:8003")
 
 queue_consumer = QueueConsumer()
 summary_generator = SummaryGenerator(model_service_url)
@@ -176,16 +178,84 @@ async def get_metrics():
         logger.error(f"Error getting metrics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-def _should_auto_apply_list(changes: List[Dict[str, Any]]) -> bool:
-    """Auto-apply only if every change meets the confidence threshold."""
+@app.get("/logs/npc-changes/{session_id}")
+async def get_npc_change_log(session_id: str):
+    """Get detailed NPC change log for a specific session"""
     try:
-        threshold = float(os.getenv("SUMMARY_AUTO_APPROVAL_THRESHOLD", "0.8"))
+        import redis.asyncio as redis
+        import os
+        
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        redis_client = redis.from_url(redis_url)
+        
+        log_data = await redis_client.get(f"npc_change_log:{session_id}")
+        
+        if not log_data:
+            raise HTTPException(status_code=404, detail=f"No change log found for session {session_id}")
+            
+        return {
+            "session_id": session_id,
+            "log": log_data.decode('utf-8'),
+            "retrieved_at": datetime.utcnow().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving NPC change log: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/logs/recent-changes")
+async def get_recent_npc_changes(limit: int = 10):
+    """Get recent NPC change logs"""
+    try:
+        import redis.asyncio as redis
+        import os
+        
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        redis_client = redis.from_url(redis_url)
+        
+        # Get all change log keys
+        keys = await redis_client.keys("npc_change_log:*")
+        
+        if not keys:
+            return {"recent_changes": [], "total": 0}
+            
+        # Sort by key (session_id) and take most recent
+        keys.sort(reverse=True)
+        recent_keys = keys[:limit]
+        
+        logs = []
+        for key in recent_keys:
+            log_data = await redis_client.get(key)
+            if log_data:
+                session_id = key.decode('utf-8').replace('npc_change_log:', '')
+                logs.append({
+                    "session_id": session_id,
+                    "log": log_data.decode('utf-8')
+                })
+        
+        return {
+            "recent_changes": logs,
+            "total": len(keys),
+            "showing": len(logs)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error retrieving recent NPC changes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def _should_auto_apply_list(changes: List[Dict[str, Any]]) -> bool:
+    """Auto-apply changes above confidence threshold - permissive for fictional NPCs."""
+    try:
+        threshold = float(os.getenv("SUMMARY_AUTO_APPROVAL_THRESHOLD", "0.6"))  # Lowered default
         if not changes:
             return False
+        # Auto-apply if ANY changes meet threshold (more permissive)
         for change in changes:
-            if float(change.get("confidence_score", 0.0)) < threshold:
-                return False
-        return True
+            if float(change.get("confidence_score", 0.0)) >= threshold:
+                return True
+        return False
     except Exception as e:
         logger.error(f"Error determining auto-apply status: {e}")
         return False

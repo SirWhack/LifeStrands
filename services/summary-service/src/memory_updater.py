@@ -12,7 +12,8 @@ class MemoryUpdater:
     """Apply approved changes to NPC Life Strands"""
     
     def __init__(self, npc_service_url: str = None):
-        self.npc_service_url = npc_service_url or os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
+        # Default to localhost for native/dev; containers override via env
+        self.npc_service_url = npc_service_url or os.getenv("NPC_SERVICE_URL", "http://localhost:8003")
         self.max_memories_per_npc = 50
         self.memory_importance_threshold = 3
         self._total_updates_applied = 0

@@ -88,7 +88,15 @@
       "Bash(cmake:*)",
       "Bash(set CMAKE_ARGS=\"-DGGML_VULKAN=1\")",
       "Bash(set FORCE_CMAKE=1)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(find:*)",
+      "Bash(./scripts/start_native_services.sh:*)",
+      "Bash(./scripts/test_hybrid_deployment.sh:*)",
+      "Bash(pkill:*)",
+      "Bash(./start_native.sh:*)",
+      "Bash(scripts/start_native_services.sh:*)",
+      "Bash(scripts/stop_native_services.sh:*)",
+      "Bash(kill:*)"
     ],
     "deny": []
   },

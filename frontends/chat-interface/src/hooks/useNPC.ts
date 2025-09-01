@@ -100,49 +100,55 @@ export const useNPC = (options: UseNPCOptions = {}): UseNPCReturn => {
     setLoading(true);
     setError(null);
 
-    try {
-      const response = await fetch(`${apiBaseUrl}/npcs`, {
-        headers: apiHeaders
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch NPCs: ${response.status}`);
+    const bases = [apiBaseUrl, 'http://localhost:8003']; // Fallback to NPC service direct
+    for (const base of bases) {
+      try {
+        // Try common endpoints: /npcs and /api/npcs
+        const urls = [`${base}/npcs`, `${base}/api/npcs`];
+        for (const url of urls) {
+          const response = await fetch(url, { headers: apiHeaders });
+          if (!response.ok) continue;
+          const data = await response.json();
+          // Accept several shapes: {npcs: [...]}, [...], {results: [...]}
+          const list = Array.isArray(data) ? data : (data.npcs || data.results || []);
+          if (Array.isArray(list)) {
+            setNPCs(list);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (err) {
+        // Try next base
+        continue;
       }
-
-      const data = await response.json();
-      setNPCs(data.npcs || []);
-    } catch (err: any) {
-      const errorMessage = handleApiError(err);
-      setError(errorMessage);
-      console.error('Error fetching NPCs:', err);
-    } finally {
-      setLoading(false);
     }
+
+    setError('Unable to load NPCs from API gateway or NPC service.');
+    setLoading(false);
   }, [apiBaseUrl, authToken]);
 
   const fetchNPC = useCallback(async (id: string): Promise<NPC | null> => {
     setLoading(true);
     setError(null);
 
-    try {
-      const response = await fetch(`${apiBaseUrl}/npc/${id}`, {
-        headers: apiHeaders
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch NPC: ${response.status}`);
+    const bases = [apiBaseUrl, 'http://localhost:8003'];
+    const paths = [`/npc/${id}`, `/npcs/${id}`, `/api/npc/${id}`, `/api/npcs/${id}`];
+    for (const base of bases) {
+      for (const path of paths) {
+        try {
+          const response = await fetch(`${base}${path}`, { headers: apiHeaders });
+          if (!response.ok) continue;
+          const npc = await response.json();
+          setLoading(false);
+          return npc;
+        } catch (err) {
+          // Try next path
+        }
       }
-
-      const npc = await response.json();
-      return npc;
-    } catch (err: any) {
-      const errorMessage = handleApiError(err);
-      setError(errorMessage);
-      console.error(`Error fetching NPC ${id}:`, err);
-      return null;
-    } finally {
-      setLoading(false);
     }
+    setError('Unable to load NPC details from API.');
+    setLoading(false);
+    return null;
   }, [apiBaseUrl, authToken]);
 
   const createNPC = useCallback(async (npcData: Partial<NPC>): Promise<NPC | null> => {

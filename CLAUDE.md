@@ -8,43 +8,161 @@ Life Strands is a sophisticated AI-driven conversation system that enables dynam
 
 ## Architecture
 
-The system uses a microservices architecture with these core services:
+The system uses a **hybrid microservices architecture** optimized for development and performance:
 
-- **Gateway Service** (port 8000): API gateway, authentication, routing
-- **Model Service** (port 8001): LLM management, GPU orchestration, hot-swapping
-- **Chat Service** (port 8002): Conversation management, WebSocket handling
+**Core Services (Native WSL2):**
+- **Gateway Service** (port 8000): API gateway, authentication, routing, WebSocket proxying
+- **Chat Service** (port 8002): Real-time conversation management, WebSocket handling, LM Studio integration
 - **NPC Service** (port 8003): Life Strand CRUD, vector search with pgvector
-- **Summary Service** (port 8004): Post-conversation analysis and NPC updates
-- **Monitor Service** (port 8005): System health monitoring and alerts
+- **Summary Service** (port 8004): Post-conversation analysis and NPC updates (optional)
+- **Monitor Service** (port 8005): System health monitoring and alerts (optional)
 
-Supporting infrastructure:
-- **PostgreSQL** with pgvector extension for semantic search
-- **Redis** for queuing, caching, and real-time communication
-- **React frontends**: Chat interface (port 3001) and admin dashboard (port 3002)
+**Infrastructure (Docker):**
+- **PostgreSQL** with pgvector extension for semantic search (port 5432)
+- **Redis** for queuing, caching, and real-time communication (port 6379)
+- **pgAdmin** for database management (port 8080)
+- **Redis Commander** for Redis administration (port 8081)
+
+**Model Service:**
+- **LM Studio** (port 1234): External LLM service with OpenAI-compatible API
+- Supports any GGUF model with chat completion capabilities
+- Connects via OpenAI-compatible `/v1/chat/completions` endpoint
+
+**Frontend Applications:**
+- **Chat Interface** (port 3000): React-based chat UI (Docker or native)
+- **Admin Dashboard** (port 3002): Management interface (Docker or native)
 
 ## Common Development Commands
 
-### Starting the System
+### Deployment Options
+
+Life Strands supports three deployment modes:
+
+1. **Hybrid (Recommended)**: Infrastructure in Docker, Services native in WSL2
+2. **All Docker**: All services containerized 
+3. **All Native**: Everything runs natively (requires manual infrastructure setup)
+
+### Hybrid Deployment (Recommended)
+
+The hybrid deployment runs infrastructure in Docker and services natively in WSL2 for optimal performance and development experience.
+
+**Setup (one-time):**
+```bash
+# Install native dependencies (handles Python 3.12 compatibility)
+make native-setup-minimal   # For basic setup
+# OR
+make native-setup           # For full setup (may have dependency issues)
+
+# Start LM Studio with a chat model loaded
+# Ensure LM Studio is accessible at localhost:1234
+```
+
+**Daily Development:**
+```bash
+make hybrid-up           # Start hybrid deployment (recommended)
+make hybrid-down         # Stop hybrid deployment  
+make hybrid-restart      # Restart hybrid deployment
+make hybrid-status       # Check hybrid deployment status
+make test-chat          # Test complete chat system
+make start-chat-frontend # Start React chat UI
+```
+
+### All Docker Deployment
 
 **From WSL/Linux:**
 ```bash
-make dev-up              # Start all services (Docker + Native Windows Model in new terminal)
-make dev-down            # Stop all services (Docker + Native Windows Model)
+make dev-up              # Start all services in Docker
+make dev-down            # Stop all services
 make dev-restart         # Restart all services
-make model-start-native  # Start only the model service in new terminal
-make model-stop-native   # Stop only the model service
 ```
 
 **From Windows (PowerShell/Command Prompt):**
 ```powershell
-.\dev.ps1 dev-up         # Start all services (recommended)
+.\dev.ps1 dev-up         # Start all services (if scripts exist)
 .\dev.ps1 dev-down       # Stop all services
 .\dev.ps1 status         # Check service status
 .\dev.ps1 health         # Health check all services
 
 # OR using batch file:
-dev.bat dev-up           # Start all services
+dev.bat dev-up           # Start all services (if scripts exist) 
 dev.bat dev-down         # Stop all services
+```
+
+### Native-Only Deployment
+
+```bash
+# Start infrastructure manually (PostgreSQL + Redis)
+# Then start native services
+make native-up           # Start all services natively
+make native-down         # Stop native services
+make native-restart      # Restart native services
+make native-status       # Show native service status
+make native-logs s=chat  # View logs for specific service
+```
+
+### Quick Start Guide
+
+**First Time Setup:**
+```bash
+# 1. Install native dependencies (one-time setup)
+./scripts/install_native_deps.sh
+
+# 2. Setup native environment
+make native-setup
+
+# 3. Start hybrid deployment
+make hybrid-up
+
+# 4. Test the deployment
+./scripts/test_hybrid_deployment.sh
+
+# 5. Check all services are healthy
+make health-check
+```
+
+**Daily Development Workflow:**
+```bash
+# Start your development session
+make hybrid-up
+
+# Test complete system
+make test-chat
+
+# Check status anytime
+make hybrid-status
+
+# View logs for specific service
+make native-logs s=chat
+
+# Stop when done
+make hybrid-down
+```
+
+## LM Studio Configuration
+
+The system integrates with LM Studio for LLM inference using OpenAI-compatible APIs.
+
+**Setup LM Studio:**
+1. **Install LM Studio** from https://lmstudio.ai
+2. **Load a Chat Model** (GGUF format recommended):
+   - Llama 2/3 Chat models
+   - Mistral/Mixtral Chat models  
+   - CodeLlama Chat models
+   - Any GGUF model with chat capabilities
+3. **Start Local Server** in LM Studio (port 1234)
+4. **Verify Connection**: `curl http://localhost:1234/v1/models`
+
+**Configuration:**
+- LM Studio URL: `http://localhost:1234/v1`
+- API Format: OpenAI-compatible `/v1/chat/completions`
+- Streaming: Supported for real-time chat
+- Model Loading: Automatic (uses currently loaded model in LM Studio)
+
+**Environment Variables:**
+```bash
+# In .env.native
+MODEL_SERVICE_URL=http://host.docker.internal:1234/v1
+LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1
 ```
 
 ### Testing
@@ -119,7 +237,7 @@ The Model Service implements sophisticated GPU memory management in `services/mo
 ### Conversation Flow
 1. **Chat Service** receives user message via WebSocket
 2. **Context Builder** converts Life Strand to optimized LLM prompt
-3. **Model Service** generates streaming response
+3. **LM Studio** generates streaming response via OpenAI-compatible API
 4. **Stream Handler** forwards tokens to WebSocket in real-time
 5. **Summary Service** processes completed conversations asynchronously
 6. **Change Extractor** identifies potential Life Strand updates
@@ -133,13 +251,14 @@ NPCs support semantic similarity search via pgvector:
 
 ## Key Implementation Details
 
-### Native Windows Model Service
-The Model Service runs **natively on Windows** (not in Docker) for optimal GPU performance:
-- **Vulkan Acceleration**: Uses AMD 7900 XTX with Vulkan drivers (NOT ROCm)
-- **Direct GPU Access**: Bypasses Docker overhead for maximum performance
-- **Native Integration**: Docker services connect via `host.docker.internal:8001`
-- **Memory Efficiency**: `use_mmap: False` prevents CPU RAM duplication
-- **24B Model Support**: Handles large models like Gryphe_Codex-24B-Small-3.2-Q6_K_L.gguf
+### LM Studio Integration
+The system integrates with **LM Studio** for optimal LLM inference performance:
+- **OpenAI-Compatible API**: Uses standard `/v1/chat/completions` endpoint
+- **GGUF Model Support**: Supports any GGUF format model with chat capabilities
+- **GPU Acceleration**: Leverages local GPU (AMD, NVIDIA, or CPU fallback)
+- **Streaming Support**: Real-time token streaming for responsive chat
+- **Model Flexibility**: Easy switching between different loaded models
+- **Local Inference**: No API costs, complete privacy and control
 
 ### WebSocket Management
 Both chat and monitoring use WebSocket connections with auto-reconnect:
@@ -233,7 +352,8 @@ Models are stored in the `Models/` directory:
 ### Chat Service (`services/chat-service/`)
 - **Session Management**: 30-minute timeout, Redis persistence
 - **Context Building**: Optimizes prompts for token efficiency
-- **Streaming**: Real-time token forwarding via WebSocket
+- **LM Studio Integration**: OpenAI-compatible API client with streaming support
+- **WebSocket Streaming**: Real-time token forwarding to client
 - **Conversation History**: Automatic truncation and relevance filtering
 
 ### Summary Service (`services/summary-service/`)

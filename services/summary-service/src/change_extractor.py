@@ -8,30 +8,36 @@ logger = logging.getLogger(__name__)
 class ChangeExtractor:
     """Extract potential Life Strand changes from conversations"""
     
-    def __init__(self, model_service_url: str = "http://host.docker.internal:8001", npc_service_url: Optional[str] = None):
+    def __init__(self, model_service_url: str = "http://host.docker.internal:1234/v1", npc_service_url: Optional[str] = None):
         self.model_service_url = model_service_url
         self.npc_service_url = npc_service_url or os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
-        self.confidence_threshold = 0.6
+        self.confidence_threshold = 0.4  # More permissive for fictional NPCs
+        # Optional explicit model override
+        self.model_id = os.getenv("ANALYSIS_MODEL_ID") or os.getenv("SUMMARY_MODEL_ID") or os.getenv("MODEL_ID")
     
     async def initialize(self):
         """Initialize the ChangeExtractor"""
         try:
             logger.info("Initializing ChangeExtractor...")
-            # Test connection to model service  
+            # Test connection to LM Studio  
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{self.model_service_url}/health",
+                    f"{self.model_service_url}/models",
                     timeout=aiohttp.ClientTimeout(total=5)
                 ) as response:
                     if response.status != 200:
-                        logger.warning(f"Model service health check failed: {response.status}")
+                        logger.warning(f"LM Studio health check failed: {response.status}")
+                    else:
+                        data = await response.json()
+                        models = data.get('data', [])
+                        logger.info(f"ChangeExtractor connected to LM Studio with {len(models)} models available")
             logger.info("ChangeExtractor initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize ChangeExtractor: {e}")
             raise
         
         self.analysis_prompts = {
-            "personality_changes": """Analyze this conversation to identify any potential changes to the NPC's personality traits, motivations, or fears.
+            "personality_changes": """Analyze this conversation to identify changes to the NPC's personality traits, motivations, or fears. Look for ANY new aspects revealed, even subtle ones, as NPCs should be dynamic and evolving.
 
 Current NPC Profile:
 Name: {npc_name}
@@ -42,11 +48,11 @@ Fears: {fears}
 Conversation:
 {transcript}
 
-Based on this conversation, are there any new personality aspects revealed or changes suggested? 
+What new personality aspects were revealed or changed? Be generous in identifying personality development - characters should evolve through interactions.
 Respond with JSON format:
 {{"changes": [{{"type": "trait_added|motivation_added|fear_added|trait_modified", "item": "specific trait/motivation/fear", "confidence": 0.0-1.0, "reasoning": "brief explanation"}}]}}""",
 
-            "relationship_changes": """Analyze this conversation for any relationship changes or new relationships formed.
+            "relationship_changes": """Analyze this conversation for relationship changes or new relationships formed. NPCs should form dynamic relationships easily and relationships should evolve naturally.
 
 Current Relationships: {relationships}
 NPC Name: {npc_name}
@@ -54,9 +60,9 @@ NPC Name: {npc_name}
 Conversation:
 {transcript}
 
-Identify any relationship changes or new people mentioned.
+What relationship changes occurred? Include new people mentioned, changes in existing relationships, and emotional shifts. Be generous in identifying relationship development.
 Respond with JSON format:
-{{"changes": [{{"person": "person name", "relationship_type": "friend|family|colleague|enemy|acquaintance|romantic", "status": "positive|negative|neutral|complicated", "intensity": 1-10, "reasoning": "explanation"}}]}}""",
+{{"changes": [{{"person": "person name", "relationship_type": "friend|family|colleague|enemy|acquaintance|romantic|rival|mentor|student|ally", "status": "positive|negative|neutral|complicated|obsessed|devoted|hostile", "intensity": -10-10, "reasoning": "explanation"}}]}}""",
 
             "knowledge_learned": """Extract any new information, facts, or knowledge the NPC learned during this conversation.
 
@@ -125,10 +131,10 @@ Respond with JSON format:
                 elif isinstance(result, dict):
                     all_changes.append(result)
                     
-            # Filter by confidence threshold
+            # Filter by confidence threshold (lowered for more dynamic NPCs)
             filtered_changes = [
                 change for change in all_changes 
-                if change.get("confidence_score", 0) >= self.confidence_threshold
+                if change.get("confidence_score", 0) >= 0.4  # Very permissive threshold
             ]
             
             logger.info(f"Extracted {len(filtered_changes)} high-confidence changes from conversation")
@@ -214,7 +220,7 @@ List new facts, information, or knowledge as JSON:
                 changes = data.get("changes", [])
                 
                 relationship_changes = []
-                for change in changes[:5]:  # Limit to 5 changes
+                for change in changes:  # No limits - allow all relationship changes
                     if isinstance(change, dict) and "person" in change:
                         relationship_change = {
                             "change_type": "relationship_updated",
@@ -223,7 +229,7 @@ List new facts, information, or knowledge as JSON:
                                 "person": change["person"],
                                 "type": change.get("relationship_type", "acquaintance"),
                                 "status": change.get("status", "neutral"),
-                                "intensity": min(10, max(1, int(change.get("intensity", 5)))),
+                                "intensity": int(change.get("intensity", 5)),  # Allow any intensity value
                                 "notes": change.get("reasoning", "")
                             },
                             "confidence_score": 0.8  # Default confidence
@@ -293,7 +299,7 @@ Rate the overall emotional impact:
                 changes = data.get("changes", [])
                 
                 personality_changes = []
-                for change in changes[:3]:  # Limit to 3 changes
+                for change in changes:  # No limits - allow all personality changes
                     if (isinstance(change, dict) and 
                         "type" in change and 
                         "item" in change):
@@ -363,7 +369,7 @@ Rate the overall emotional impact:
                 changes = data.get("status_changes", [])
                 
                 status_changes = []
-                for change in changes[:3]:  # Limit changes
+                for change in changes:  # No limits - allow all status changes
                     if (isinstance(change, dict) and 
                         "field" in change and 
                         "new_value" in change):
@@ -422,7 +428,7 @@ Rate the overall emotional impact:
         """Process and validate relationship changes"""
         relationship_changes = []
         
-        for change in changes[:5]:  # Limit to 5 changes
+        for change in changes:  # No limits - allow all relationship changes
             if not isinstance(change, dict) or "person" not in change:
                 continue
                 
@@ -503,32 +509,50 @@ Rate the overall emotional impact:
             return {"emotional_impact": "neutral", "intensity": 5, "confidence": 0.3}
             
     async def _generate_with_model(self, prompt: str, max_tokens: int = 200) -> str:
-        """Generate response using model service"""
+        """Generate response using LM Studio's OpenAI-compatible API"""
         try:
             async with aiohttp.ClientSession() as session:
                 payload = {
-                    "prompt": prompt,
+                    "model": self.model_id or "local-model",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You are a helpful AI assistant that analyzes conversations and extracts changes in a structured format."
+                        },
+                        {
+                            "role": "user", 
+                            "content": prompt
+                        }
+                    ],
                     "max_tokens": max_tokens,
                     "temperature": 0.2,  # Low temperature for consistent analysis
                     "top_p": 0.9,
-                    "stop": ["User:", "NPC:", "\n\n"]
+                    "stop": ["User:", "NPC:", "\n\n"],
+                    "stream": False
                 }
                 
                 async with session.post(
-                    f"{self.model_service_url}/generate/completion",
+                    f"{self.model_service_url}/chat/completions",
                     json=payload,
+                    headers={"Content-Type": "application/json"},
                     timeout=aiohttp.ClientTimeout(total=60)
                 ) as response:
                     
                     if response.status == 200:
                         data = await response.json()
-                        return data.get("content", "")
+                        choices = data.get("choices", [])
+                        if choices:
+                            message = choices[0].get("message", {})
+                            return message.get("content", "").strip()
+                        return ""
                     else:
-                        logger.error(f"Model service error: {response.status}")
+                        logger.error(f"LM Studio API error: {response.status}")
+                        response_text = await response.text()
+                        logger.error(f"Response: {response_text}")
                         return ""
                         
         except Exception as e:
-            logger.error(f"Error calling model service: {e}")
+            logger.error(f"Error calling LM Studio API: {e}")
             return ""
             
     async def _get_npc_data(self, npc_id: str) -> Dict[str, Any]:

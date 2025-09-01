@@ -8,9 +8,11 @@ logger = logging.getLogger(__name__)
 class SummaryGenerator:
     """Generate conversation summaries using LLM"""
     
-    def __init__(self, model_service_url: str = "http://host.docker.internal:8001", npc_service_url: Optional[str] = None):
+    def __init__(self, model_service_url: str = "http://host.docker.internal:1234/v1", npc_service_url: Optional[str] = None):
         self.model_service_url = model_service_url
         self.npc_service_url = npc_service_url or os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
+        # Optional explicit model override (e.g., gryphe_codex-24b-small-3.2@q5_k_l)
+        self.model_id = os.getenv("SUMMARY_MODEL_ID") or os.getenv("MODEL_ID")
         self.total_summaries = 0
         self.summary_prompts = {
             "conversation": """You are an expert conversation analyst. Create a concise summary of the following conversation between a user and an NPC character.
@@ -46,14 +48,18 @@ Create a natural memory entry that the character would have about this interacti
         """Initialize the SummaryGenerator"""
         try:
             logger.info("Initializing SummaryGenerator...")
-            # Test connection to model service
+            # Test connection to LM Studio
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{self.model_service_url}/health",
+                    f"{self.model_service_url}/models",
                     timeout=aiohttp.ClientTimeout(total=5)
                 ) as response:
                     if response.status != 200:
-                        logger.warning(f"Model service health check failed: {response.status}")
+                        logger.warning(f"LM Studio health check failed: {response.status}")
+                    else:
+                        data = await response.json()
+                        models = data.get('data', [])
+                        logger.info(f"Connected to LM Studio with {len(models)} models available")
             logger.info("SummaryGenerator initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize SummaryGenerator: {e}")
@@ -371,32 +377,51 @@ Create a natural memory entry that the character would have about this interacti
             return []
             
     async def _generate_with_model(self, prompt: str, max_tokens: int = 200) -> str:
-        """Generate text using the model service"""
+        """Generate text using LM Studio's OpenAI-compatible API"""
         try:
             async with aiohttp.ClientSession() as session:
                 payload = {
-                    "prompt": prompt,
+                    # Use configured model if provided; otherwise rely on LM Studio default
+                    "model": self.model_id or "local-model",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You are a helpful AI assistant that analyzes conversations and generates concise summaries."
+                        },
+                        {
+                            "role": "user", 
+                            "content": prompt
+                        }
+                    ],
                     "max_tokens": max_tokens,
                     "temperature": 0.3,  # Lower temperature for more consistent summaries
                     "top_p": 0.9,
-                    "stop": ["User:", "NPC:", "\n\n---"]
+                    "stop": ["User:", "NPC:", "\n\n---"],
+                    "stream": False
                 }
                 
                 async with session.post(
-                    f"{self.model_service_url}/generate/completion",
+                    f"{self.model_service_url}/chat/completions",
                     json=payload,
+                    headers={"Content-Type": "application/json"},
                     timeout=aiohttp.ClientTimeout(total=60)
                 ) as response:
                     
                     if response.status == 200:
                         data = await response.json()
-                        return data.get("content", "")
+                        choices = data.get("choices", [])
+                        if choices:
+                            message = choices[0].get("message", {})
+                            return message.get("content", "").strip()
+                        return ""
                     else:
-                        logger.error(f"Model service error: {response.status}")
+                        logger.error(f"LM Studio API error: {response.status}")
+                        response_text = await response.text()
+                        logger.error(f"Response: {response_text}")
                         return ""
                         
         except Exception as e:
-            logger.error(f"Error calling model service: {e}")
+            logger.error(f"Error calling LM Studio API: {e}")
             return ""
             
     async def _get_npc_name(self, npc_id: str) -> str:

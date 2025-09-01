@@ -1,0 +1,292 @@
+#!/bin/bash
+# Install Dependencies for Native Life Strands Services
+# This script installs all required system and Python dependencies
+
+set -e
+
+echo "Installing Life Strands native dependencies..."
+
+# Colors for output
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# Check if running on WSL or Linux
+if grep -qi wsl /proc/version 2>/dev/null; then
+    echo -e "${BLUE}Detected WSL environment${NC}"
+    WSL_ENV=true
+else
+    echo -e "${BLUE}Detected Linux environment${NC}"
+    WSL_ENV=false
+fi
+
+# Update system packages
+echo -e "${BLUE}Updating system packages...${NC}"
+sudo apt update
+
+# Install system dependencies
+echo -e "${BLUE}Installing system dependencies...${NC}"
+sudo apt install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    build-essential \
+    pkg-config \
+    libffi-dev \
+    libssl-dev \
+    libpq-dev \
+    postgresql-client \
+    redis-tools \
+    curl \
+    wget \
+    git \
+    gcc \
+    g++ \
+    make
+
+# Install Node.js for frontend development (optional)
+if ! command -v node &> /dev/null; then
+    echo -e "${BLUE}Installing Node.js...${NC}"
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    sudo apt install -y nodejs
+else
+    echo -e "${GREEN}Node.js already installed: $(node --version)${NC}"
+fi
+
+# Create project structure
+echo -e "${BLUE}Setting up project directories...${NC}"
+mkdir -p logs pids backups
+
+# Remove existing virtual environment if it has issues
+if [ -d "venv" ]; then
+    echo -e "${YELLOW}Removing existing virtual environment to fix Python 3.12 compatibility...${NC}"
+    rm -rf venv
+fi
+
+# Create fresh virtual environment
+echo -e "${BLUE}Creating fresh Python virtual environment...${NC}"
+python3 -m venv venv
+
+# Activate virtual environment
+echo -e "${BLUE}Activating virtual environment...${NC}"
+source venv/bin/activate
+
+# Install compatible pip and setuptools first
+echo -e "${BLUE}Installing compatible pip and setuptools for Python 3.12...${NC}"
+python -m pip install --upgrade pip
+python -m pip install --no-cache-dir "setuptools==68.2.2" "wheel==0.41.2" "pip==23.3.1"
+
+# Install core Python dependencies with compatible versions
+echo -e "${BLUE}Installing core Python dependencies...${NC}"
+python -m pip install --no-cache-dir \
+    fastapi==0.104.1 \
+    uvicorn[standard]==0.24.0 \
+    pydantic==2.5.0 \
+    aiohttp==3.9.0 \
+    aiofiles==23.2.1 \
+    python-multipart==0.0.6 \
+    python-dotenv==1.0.0 \
+    structlog==23.2.0 \
+    colorama==0.4.6
+
+# Install database dependencies
+echo -e "${BLUE}Installing database dependencies...${NC}"
+python -m pip install --no-cache-dir \
+    asyncpg==0.29.0 \
+    psycopg2-binary==2.9.7 \
+    sqlalchemy==2.0.23 \
+    alembic==1.12.1
+
+# Install Redis dependencies  
+echo -e "${BLUE}Installing Redis dependencies...${NC}"
+python -m pip install --no-cache-dir \
+    redis==5.0.1 \
+    hiredis==2.2.3
+
+# Install auth and security dependencies
+echo -e "${BLUE}Installing authentication dependencies...${NC}"
+python -m pip install --no-cache-dir \
+    bcrypt==4.0.1 \
+    PyJWT==2.8.0 \
+    passlib==1.7.4 \
+    python-jose==3.3.0 \
+    cryptography==41.0.7
+
+# Install monitoring and metrics dependencies
+echo -e "${BLUE}Installing monitoring dependencies...${NC}"
+python -m pip install --no-cache-dir \
+    prometheus_client==0.19.0 \
+    psutil==5.9.6 \
+    httpx==0.25.2
+
+# Install WebSocket dependencies
+echo -e "${BLUE}Installing WebSocket dependencies...${NC}"
+python -m pip install --no-cache-dir \
+    websockets==12.0 \
+    python-socketio==5.10.0
+
+# Install vector/embedding dependencies
+echo -e "${BLUE}Installing vector search dependencies...${NC}"
+python -m pip install --no-cache-dir \
+    numpy==1.25.2 \
+    scikit-learn==1.3.2
+
+# Install service-specific dependencies
+echo -e "${BLUE}Installing service-specific dependencies...${NC}"
+
+for service in gateway-service chat-service npc-service summary-service monitor-service; do
+    if [ -f "services/$service/requirements.txt" ]; then
+        echo -e "${BLUE}Installing dependencies for $service...${NC}"
+        pip install -r "services/$service/requirements.txt"
+    else
+        echo -e "${YELLOW}No requirements.txt found for $service${NC}"
+    fi
+done
+
+# Install frontend dependencies if directories exist
+if [ -d "frontends/chat-interface" ]; then
+    echo -e "${BLUE}Installing chat interface dependencies...${NC}"
+    cd frontends/chat-interface && npm install && cd ../..
+fi
+
+if [ -d "frontends/admin-dashboard" ]; then
+    echo -e "${BLUE}Installing admin dashboard dependencies...${NC}"
+    cd frontends/admin-dashboard && npm install && cd ../..
+fi
+
+# Create native configuration if it doesn't exist
+if [ ! -f ".env.native" ]; then
+    echo -e "${BLUE}Creating native environment configuration...${NC}"
+    cat > .env.native << 'EOF'
+# Life Strands Native Environment Configuration
+# Generated by install_native_deps.sh
+
+# Database Configuration  
+DATABASE_URL=postgresql://lifestrands_user:lifestrands_password@localhost:5432/lifestrands
+
+# Redis Configuration
+REDIS_URL=redis://:redis_password@localhost:6379
+
+# Service URLs (localhost for native services)
+MODEL_SERVICE_URL=http://localhost:8001
+GATEWAY_URL=http://localhost:8000
+CHAT_SERVICE_URL=http://localhost:8002
+NPC_SERVICE_URL=http://localhost:8003
+SUMMARY_SERVICE_URL=http://localhost:8004
+MONITOR_SERVICE_URL=http://localhost:8005
+
+# Authentication & Security
+JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
+CORS_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:3002
+
+# Chat Service Configuration
+MAX_CONCURRENT_CONVERSATIONS=50
+CONVERSATION_TIMEOUT_MINUTES=30
+
+# Rate Limiting
+RATE_LIMIT_REQUESTS_PER_MINUTE=100
+
+# NPC Service Configuration
+ENABLE_EMBEDDINGS=false
+
+# Summary Service Configuration
+SUMMARY_AUTO_APPROVAL_THRESHOLD=0.8
+SUMMARY_WORKER_CONCURRENCY=3
+
+# Monitoring Configuration
+METRICS_RETENTION_DAYS=30
+ALERT_WEBHOOK=
+
+# Logging
+LOG_LEVEL=INFO
+
+# Model Service (if running natively)
+MODELS_PATH=/path/to/your/models
+CHAT_MODEL=your-chat-model.gguf
+SUMMARY_MODEL=your-summary-model.gguf
+EMBEDDING_MODEL=your-embedding-model.gguf
+CHAT_CONTEXT_SIZE=8192
+EOF
+    echo -e "${YELLOW}Created .env.native - please review and customize the settings${NC}"
+fi
+
+# Set up systemd service files (optional for auto-start)
+if [ "$WSL_ENV" = false ]; then
+    echo -e "${BLUE}Creating systemd service files...${NC}"
+    sudo tee /etc/systemd/system/lifestrands-native.service > /dev/null << EOF
+[Unit]
+Description=Life Strands Native Services
+After=network.target postgresql.service redis.service
+
+[Service]
+Type=forking
+User=$USER
+WorkingDirectory=$(pwd)
+ExecStart=$(pwd)/scripts/start_native_services.sh start
+ExecStop=$(pwd)/scripts/start_native_services.sh stop
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    sudo systemctl daemon-reload
+    echo -e "${GREEN}Systemd service created. Enable with: sudo systemctl enable lifestrands-native${NC}"
+fi
+
+# Create a test script
+echo -e "${BLUE}Creating test script...${NC}"
+cat > scripts/test_native_setup.sh << 'EOF'
+#!/bin/bash
+# Test Native Setup
+echo "Testing native Life Strands setup..."
+
+# Test Python environment
+source venv/bin/activate
+python3 -c "import fastapi, uvicorn, asyncpg, redis, aiohttp; print('✅ All Python dependencies available')"
+
+# Test database connection (if running)
+if pg_isready -h localhost -p 5432 -U lifestrands_user > /dev/null 2>&1; then
+    echo "✅ PostgreSQL is accessible"
+else
+    echo "⚠️  PostgreSQL not running or not accessible"
+fi
+
+# Test Redis connection (if running) 
+if redis-cli -h localhost -p 6379 ping > /dev/null 2>&1; then
+    echo "✅ Redis is accessible"
+else
+    echo "⚠️  Redis not running or not accessible"
+fi
+
+# Test Node.js (if installed)
+if command -v node &> /dev/null; then
+    echo "✅ Node.js available: $(node --version)"
+else
+    echo "⚠️  Node.js not installed"
+fi
+
+echo "Setup test completed!"
+EOF
+
+chmod +x scripts/test_native_setup.sh
+
+# Summary
+echo ""
+echo -e "${GREEN}🎉 Native dependencies installation completed!${NC}"
+echo ""
+echo -e "${BLUE}Next steps:${NC}"
+echo "1. Review and customize .env.native configuration"
+echo "2. Start infrastructure: make hybrid-up"
+echo "3. Test setup: ./scripts/test_native_setup.sh"
+echo "4. Start native services: ./scripts/start_native_services.sh"
+echo ""
+echo -e "${BLUE}Virtual environment:${NC} $(pwd)/venv"
+echo -e "${BLUE}Configuration file:${NC} $(pwd)/.env.native" 
+echo -e "${BLUE}Logs directory:${NC} $(pwd)/logs"
+echo ""
+echo -e "${YELLOW}Remember to activate the virtual environment: source venv/bin/activate${NC}"

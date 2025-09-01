@@ -1,0 +1,252 @@
+INFO:     Will watch for changes in these directories: ['/home/swynn/Code/LifeStrands/services/npc-service']
+INFO:     Uvicorn running on http://0.0.0.0:8003 (Press CTRL+C to quit)
+INFO:     Started reloader process [25199] using StatReload
+INFO:     Started server process [25202]
+INFO:     Waiting for application startup.
+INFO:src.npc_repository:NPCRepository initialized with database connection
+INFO:src.embedding_manager:Embeddings are disabled, skipping initialization
+INFO:main:NPC service started successfully
+INFO:     Application startup complete.
+INFO:     127.0.0.1:42928 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39698 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39698 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41048 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34546 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55260 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55260 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55260 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53020 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53020 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53020 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43612 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43612 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43612 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49256 - "GET /npc/ HTTP/1.1" 307 Temporary Redirect
+INFO:     127.0.0.1:49256 - "GET /npc HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:49664 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49664 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49664 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39604 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39604 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43418 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43426 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56204 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56208 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55448 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51786 - "POST /npcs HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:51798 - "POST /npcs HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:51804 - "POST /npcs HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:51814 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50930 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37754 - "GET /health HTTP/1.1" 200 OK
+WARNING:  StatReload detected changes in 'main.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:src.npc_repository:NPCRepository database connections closed
+INFO:main:NPC service shut down
+INFO:     Application shutdown complete.
+INFO:     Finished server process [25202]
+INFO:     Started server process [30290]
+INFO:     Waiting for application startup.
+INFO:src.npc_repository:NPCRepository initialized with database connection
+INFO:src.embedding_manager:Embeddings are disabled, skipping initialization
+INFO:main:NPC service started successfully
+INFO:     Application startup complete.
+INFO:src.npc_repository:Created NPC: 4d6b421b-c0b6-4580-8519-6c6ba2536abc (Test Character)
+INFO:main:Created NPC (compat) 4d6b421b-c0b6-4580-8519-6c6ba2536abc
+INFO:     127.0.0.1:52566 - "POST /npcs HTTP/1.1" 201 Created
+INFO:     127.0.0.1:52582 - "GET /npc/4d6b421b-c0b6-4580-8519-6c6ba2536abc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52596 - "GET /npc/4d6b421b-c0b6-4580-8519-6c6ba2536abc/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52606 - "GET /npc/4d6b421b-c0b6-4580-8519-6c6ba2536abc/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52618 - "GET /npc/4d6b421b-c0b6-4580-8519-6c6ba2536abc/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52630 - "GET /npcs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57270 - "GET /npc/4d6b421b-c0b6-4580-8519-6c6ba2536abc/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57288 - "GET /npc/4d6b421b-c0b6-4580-8519-6c6ba2536abc/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52892 - "GET /npcs/4d6b421b-c0b6-4580-8519-6c6ba2536abc HTTP/1.1" 200 OK
+INFO:src.npc_repository:Created NPC: a9298cf6-798c-4632-9ba0-f5553e10c0a3 (Test Character)
+INFO:main:Created NPC (compat) a9298cf6-798c-4632-9ba0-f5553e10c0a3
+INFO:     127.0.0.1:52906 - "POST /npcs HTTP/1.1" 201 Created
+INFO:     127.0.0.1:52912 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52928 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52914 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52930 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52926 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52934 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52940 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52948 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52952 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52968 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52988 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52984 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53004 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53012 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52982 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53028 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53026 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53042 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53062 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53046 - "GET /npc/a9298cf6-798c-4632-9ba0-f5553e10c0a3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49058 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:src.npc_repository:Created NPC: d8ec4ebc-5980-4ea1-b6dc-f8cd7a31e14e (Test Character)
+INFO:main:Created NPC (compat) d8ec4ebc-5980-4ea1-b6dc-f8cd7a31e14e
+INFO:     127.0.0.1:34572 - "POST /npcs HTTP/1.1" 201 Created
+INFO:     127.0.0.1:34586 - "GET /npc/11111111-1111-1111-1111-111111111111/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55430 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55430 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55438 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33734 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33734 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+WARNING:  StatReload detected changes in 'main.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:src.npc_repository:NPCRepository database connections closed
+INFO:main:NPC service shut down
+INFO:     Application shutdown complete.
+INFO:     Finished server process [30290]
+INFO:     Started server process [31012]
+INFO:     Waiting for application startup.
+INFO:src.npc_repository:NPCRepository initialized with database connection
+INFO:src.embedding_manager:Embeddings are disabled, skipping initialization
+INFO:main:NPC service started successfully
+INFO:     Application startup complete.
+INFO:src.npc_repository:Created NPC: e2af464b-1666-4344-b2bc-12efa86f4027 (Test Character)
+INFO:main:Created NPC (compat) e2af464b-1666-4344-b2bc-12efa86f4027
+INFO:     127.0.0.1:54760 - "POST /npcs HTTP/1.1" 201 Created
+INFO:     127.0.0.1:54772 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54778 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54784 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54794 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54810 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50302 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52196 - "GET /npcs/e2af464b-1666-4344-b2bc-12efa86f4027 HTTP/1.1" 200 OK
+INFO:src.npc_repository:Created NPC: 34a0ffc4-1b90-4806-a1a9-f4ab7c7c04ff (Test Character)
+INFO:main:Created NPC (compat) 34a0ffc4-1b90-4806-a1a9-f4ab7c7c04ff
+INFO:     127.0.0.1:52208 - "POST /npcs HTTP/1.1" 201 Created
+INFO:     127.0.0.1:52218 - "GET /npc/34a0ffc4-1b90-4806-a1a9-f4ab7c7c04ff HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52228 - "GET /npc/34a0ffc4-1b90-4806-a1a9-f4ab7c7c04ff/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52230 - "GET /npc/34a0ffc4-1b90-4806-a1a9-f4ab7c7c04ff/prompt HTTP/1.1" 200 OK
+INFO:src.npc_repository:Created NPC: 042b5b7f-623e-4285-a400-8012f607bcfa (Test Character)
+INFO:main:Created NPC (compat) 042b5b7f-623e-4285-a400-8012f607bcfa
+INFO:     127.0.0.1:47116 - "POST /npcs HTTP/1.1" 201 Created
+INFO:     127.0.0.1:47136 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47138 - "GET /health HTTP/1.1" 200 OK
+INFO:src.npc_repository:Created NPC: 171f8317-f7cf-4670-9f20-53752def2ad3 (Test Character)
+INFO:main:Created NPC (compat) 171f8317-f7cf-4670-9f20-53752def2ad3
+INFO:     127.0.0.1:54934 - "POST /npcs HTTP/1.1" 201 Created
+INFO:     127.0.0.1:54940 - "GET /npc/171f8317-f7cf-4670-9f20-53752def2ad3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54944 - "GET /npc/171f8317-f7cf-4670-9f20-53752def2ad3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54950 - "GET /npc/171f8317-f7cf-4670-9f20-53752def2ad3/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60580 - "GET /npcs/171f8317-f7cf-4670-9f20-53752def2ad3 HTTP/1.1" 200 OK
+INFO:src.npc_repository:Created NPC: d308cf1e-dc9b-4f43-983b-7fd6c5760ed9 (Test Character)
+INFO:main:Created NPC (compat) d308cf1e-dc9b-4f43-983b-7fd6c5760ed9
+INFO:     127.0.0.1:60586 - "POST /npcs HTTP/1.1" 201 Created
+INFO:src.npc_repository:Created NPC: 94ea82b2-323d-4fc3-ada0-eb026e62aea7 (Test Character)
+INFO:main:Created NPC (compat) 94ea82b2-323d-4fc3-ada0-eb026e62aea7
+INFO:     127.0.0.1:60588 - "POST /npcs HTTP/1.1" 201 Created
+INFO:     127.0.0.1:51178 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51180 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54292 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54292 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50732 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50732 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50732 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54968 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54982 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45206 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59714 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34196 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34492 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54920 - "GET /npc/94ea82b2-323d-4fc3-ada0-eb026e62aea7 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54920 - "GET /npc/d308cf1e-dc9b-4f43-983b-7fd6c5760ed9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54920 - "GET /npc/042b5b7f-623e-4285-a400-8012f607bcfa HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54920 - "GET /npc/e2af464b-1666-4344-b2bc-12efa86f4027 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54920 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54920 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54920 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58066 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58066 - "GET /npc/d308cf1e-dc9b-4f43-983b-7fd6c5760ed9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:32836 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:src.error_handler:Operation: get_npc, Resource: d308cf1e-dc9b-4f43-983b-7fd6c5760ed9, Resource not found: NPC not found: d308cf1e-dc9b-4f43-983b-7fd6c5760ed9
+INFO:     127.0.0.1:32836 - "GET /npc/d308cf1e-dc9b-4f43-983b-7fd6c5760ed9 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:32836 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:32836 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:32836 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:32836 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57614 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57614 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57614 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41926 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:src.npc_repository:Created NPC: d3fe16ce-07d2-4752-a80d-05720dc8bf89 (Test Character)
+INFO:main:Created NPC (compat) d3fe16ce-07d2-4752-a80d-05720dc8bf89
+INFO:     127.0.0.1:56742 - "POST /npcs HTTP/1.1" 201 Created
+INFO:     127.0.0.1:56748 - "GET /npc/d3fe16ce-07d2-4752-a80d-05720dc8bf89 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56758 - "GET /npc/d3fe16ce-07d2-4752-a80d-05720dc8bf89/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56762 - "GET /npc/d3fe16ce-07d2-4752-a80d-05720dc8bf89/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41680 - "GET /npcs/d3fe16ce-07d2-4752-a80d-05720dc8bf89 HTTP/1.1" 200 OK
+INFO:src.npc_repository:Created NPC: 9059322c-4630-478e-9cc6-04e7f752d922 (Test Character)
+INFO:main:Created NPC (compat) 9059322c-4630-478e-9cc6-04e7f752d922
+INFO:     127.0.0.1:41694 - "POST /npcs HTTP/1.1" 201 Created
+INFO:src.npc_repository:Created NPC: 86f0d615-7830-404a-bee4-b3e5fba684c4 (Test Character)
+INFO:main:Created NPC (compat) 86f0d615-7830-404a-bee4-b3e5fba684c4
+INFO:     127.0.0.1:41710 - "POST /npcs HTTP/1.1" 201 Created
+INFO:     127.0.0.1:60208 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60214 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33298 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33298 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33298 - "GET /npc/9059322c-4630-478e-9cc6-04e7f752d922 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33298 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46374 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46374 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58936 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58936 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58936 - "GET /npc/9059322c-4630-478e-9cc6-04e7f752d922 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45654 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50010 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50010 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50010 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35860 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35860 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35860 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35860 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35860 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55306 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55306 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50458 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50458 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50458 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50458 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50458 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50458 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50458 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39018 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39018 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39018 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42800 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42800 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42800 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42800 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42800 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52646 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52656 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52674 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54796 - "GET /npc/9059322c-4630-478e-9cc6-04e7f752d922 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54808 - "GET /npc/9059322c-4630-478e-9cc6-04e7f752d922 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54824 - "GET /npc/9059322c-4630-478e-9cc6-04e7f752d922/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57656 - "GET /npc/9059322c-4630-478e-9cc6-04e7f752d922/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40096 - "GET /npc/22222222-2222-2222-2222-222222222222 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41542 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43550 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43562 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43574 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35214 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35348 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57124 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4/prompt HTTP/1.1" 200 OK
+ERROR:src.npc_repository:Error getting NPC <NPC_ID>: invalid input for query argument $1: '<NPC_ID>' (invalid UUID '<NPC_ID>': length must be between 32..36 characters, got 8)
+INFO:src.error_handler:Operation: get_npc, Resource: <NPC_ID>, Resource not found: NPC not found: <NPC_ID>
+INFO:     127.0.0.1:45054 - "GET /npc/%3CNPC_ID%3E HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:45934 - "GET /npcs?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45934 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45942 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45956 - "GET /npc/86f0d615-7830-404a-bee4-b3e5fba684c4/prompt HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33204 - "GET /npc/11111111-1111-1111-1111-111111111111 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57978 - "GET /npcs?limit=1 HTTP/1.1" 200 OK

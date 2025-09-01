@@ -51,19 +51,29 @@ class ConversationManager:
         self.redis_client: Optional[redis.Redis] = None
         self.active_sessions: Dict[str, ConversationSession] = {}
         self.cleanup_interval = 300  # 5 minutes
-        self.lm_studio_url = os.getenv("LM_STUDIO_BASE_URL", "http://host.docker.internal:1234/v1")
-        self.npc_service_url = os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
-        
+        # Default to Windows host IP for WSL; override with LM_STUDIO_BASE_URL/MODEL_SERVICE_URL
+        self.lm_studio_url = (
+            os.getenv("LM_STUDIO_BASE_URL")
+            or os.getenv("MODEL_SERVICE_URL")
+            or "http://10.4.20.10:1234/v1"
+        )
+        # Pin localhost defaults for native/dev runs; docker-compose overrides via env
+        self.npc_service_url = os.getenv("NPC_SERVICE_URL", "http://localhost:8003")
+        # Optional explicit model override (e.g., gryphe_codex-24b-small-3.2@q5_k_l)
+        self.chat_model_id = os.getenv("CHAT_MODEL_ID") or os.getenv("MODEL_ID")
+        self._cleanup_task: Optional[asyncio.Task] = None
+
     async def initialize(self):
         """Initialize Redis connection and start cleanup task"""
         try:
             import os
+            # Ensure the same Redis is used across services in local/dev
             redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
             self.redis_client = redis.from_url(redis_url)
             await self.redis_client.ping()
             
             # Start periodic cleanup task
-            asyncio.create_task(self._periodic_cleanup())
+            self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
             
             logger.info("ConversationManager initialized successfully")
             
@@ -136,9 +146,6 @@ class ConversationManager:
                 role = "assistant" if msg["role"] == "assistant" else "user"
                 messages.append({"role": role, "content": msg["content"]})
             
-            # Add current user message
-            messages.append({"role": "user", "content": message})
-            
             # Get complete response from model service (non-streaming for now)
             complete_response = await self._get_complete_response_from_model_chatml(messages, session_id)
             
@@ -155,6 +162,51 @@ class ConversationManager:
             
         except Exception as e:
             logger.error(f"Error processing message for session {session_id}: {e}")
+            raise
+
+    async def stream_message(self, session_id: str, message: str) -> AsyncGenerator[str, None]:
+        """Process user message and stream response chunks as they arrive."""
+        try:
+            session = await self._get_session(session_id)
+            if not session or not session.is_active:
+                raise ValueError(f"Invalid or inactive session: {session_id}")
+
+            # Add user message to session
+            session.add_message("user", message)
+
+            # Build context for LLM
+            try:
+                from .context_builder import ContextBuilder
+            except Exception:
+                from context_builder import ContextBuilder
+            context_builder = ContextBuilder()
+
+            # Get NPC data and system prompt
+            npc_data = await self._get_npc_data(session.npc_id)
+            system_prompt = context_builder.build_system_prompt(npc_data)
+
+            # Assemble ChatML messages including recent history (which includes the just-added user message)
+            messages = [{"role": "system", "content": system_prompt}]
+            for msg in session.messages[-10:]:
+                role = "assistant" if msg["role"] == "assistant" else "user"
+                messages.append({"role": role, "content": msg["content"]})
+
+            # Stream from model service
+            collected: list[str] = []
+            async for chunk in self._stream_from_model_chatml(messages, session_id):
+                if chunk:
+                    collected.append(chunk)
+                    yield chunk
+
+            # On completion, persist assistant message
+            complete = "".join(collected).strip()
+            if complete:
+                session.add_message("assistant", complete)
+                await self._store_session(session)
+
+        except Exception as e:
+            logger.error(f"Error streaming message for session {session_id}: {e}")
+            # Propagate so caller can surface error
             raise
             
     async def end_conversation(self, session_id: str):
@@ -304,7 +356,7 @@ class ConversationManager:
         
         logger.info(f"Using currently loaded model in LM Studio for session {session_id}")
         
-        # OpenAI-compatible payload - omit model to use whatever is loaded
+        # OpenAI-compatible payload
         payload = {
             "messages": messages,  # Proper ChatML message structure
             "max_tokens": 150,  # Shorter responses
@@ -313,6 +365,9 @@ class ConversationManager:
             "stream": True,
             "stop": ["\n\nUser:", "User:", "\n\n###", "###"]  # Stop sequences
         }
+        # If an explicit model is configured, include it
+        if self.chat_model_id:
+            payload["model"] = self.chat_model_id
         
         logger.info(f"Streaming from LM Studio for session {session_id}")
         
@@ -324,6 +379,8 @@ class ConversationManager:
                     chunk_count = 0
                     token_count = 0
                     max_tokens = 150  # Hard limit
+                    had_content = False
+                    buffered: list[str] = []
                     
                     async for line in resp.content:
                         if not line:
@@ -361,6 +418,8 @@ class ConversationManager:
                                 if content:
                                     chunk_count += 1
                                     token_count += len(content.split())  # Rough token count
+                                    had_content = True
+                                    buffered.append(content)
                                     
                                     # Hard stop at token limit
                                     if token_count >= max_tokens:
@@ -374,6 +433,16 @@ class ConversationManager:
                             continue
                             
                     logger.info(f"Streaming generator exhausted for session {session_id} ({chunk_count} total chunks)")
+
+                    # Fallback: if no content streamed, try a non-streaming completion once
+                    if not had_content:
+                        try:
+                            logger.info(f"No streamed content for session {session_id}; fetching complete response")
+                            full = await self._get_complete_response_from_model_chatml(messages, session_id)
+                            if full:
+                                yield full
+                        except Exception as fe:
+                            logger.error(f"Fallback complete response failed: {fe}")
                             
         except Exception as e:
             logger.error(f"Error streaming from LM Studio: {e}")
@@ -386,7 +455,7 @@ class ConversationManager:
         
         logger.info(f"Getting complete response from LM Studio for session {session_id}")
         
-        # OpenAI-compatible payload - omit model to use whatever is loaded, no streaming
+        # OpenAI-compatible payload (non-streaming)
         payload = {
             "messages": messages,  # Proper ChatML message structure
             "max_tokens": 150,  # Shorter responses
@@ -395,6 +464,8 @@ class ConversationManager:
             "stream": False,  # No streaming
             "stop": ["\n\nUser:", "User:", "\n\n###", "###"]  # Stop sequences
         }
+        if self.chat_model_id:
+            payload["model"] = self.chat_model_id
         
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -479,3 +550,17 @@ class ConversationManager:
             except Exception as e:
                 logger.error(f"Error in periodic cleanup: {e}")
                 await asyncio.sleep(60)  # Wait before retrying
+
+    async def shutdown(self):
+        """Gracefully stop background tasks and close resources."""
+        try:
+            if self._cleanup_task:
+                self._cleanup_task.cancel()
+                try:
+                    await self._cleanup_task
+                except asyncio.CancelledError:
+                    pass
+            # No explicit Redis close needed for redis.asyncio client
+            logger.info("ConversationManager shutdown complete")
+        except Exception as e:
+            logger.debug(f"ConversationManager shutdown error: {e}")

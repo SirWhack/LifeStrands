@@ -255,6 +255,18 @@ async def npc_list(
         f"/npcs?limit={limit}&offset={offset}"
     )
 
+@app.get("/api/npcs")
+async def npc_list_frontend(
+    limit: int = 50,
+    offset: int = 0
+):
+    """API route for NPC list (frontend compatibility)"""
+    return await service_router.proxy_request(
+        "npc-service",
+        "GET",
+        f"/npcs?limit={limit}&offset={offset}"
+    )
+
 # Additional NPC route for frontend compatibility
 @app.get("/api/npc/npcs")
 async def npc_list_api(
@@ -379,19 +391,20 @@ async def get_metrics():
         logger.error(f"Error generating metrics: {e}")
         return "# Error generating metrics"
 
+import os
+
 @app.websocket("/ws")
 async def websocket_proxy(websocket: WebSocket):
     """Proxy WebSocket connections to chat service"""
     await websocket.accept()
     
-    # Extract token from query parameters
+    # Extract token from query parameters (optional for now)
     token = websocket.query_params.get("token")
-    if not token:
-        await websocket.close(code=1008, reason="Missing token")
-        return
     
-    # Connect to chat service WebSocket
-    chat_ws_url = "ws://localhost:8002/ws"
+    # Connect to chat service WebSocket; prefer env var to work in Docker and native
+    chat_http = os.getenv("CHAT_SERVICE_URL", "http://localhost:8002").rstrip("/")
+    # Convert http(s) -> ws(s) and append /ws
+    chat_ws_url = chat_http.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
     
     try:
         async with websockets.connect(chat_ws_url) as chat_ws:

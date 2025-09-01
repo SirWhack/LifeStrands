@@ -1,9 +1,6 @@
 networks:
   lifestrands-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
 
 volumes:
   postgres-data:
@@ -34,8 +31,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./database/migrations:/docker-entrypoint-initdb.d
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.10
+      - lifestrands-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U lifestrands_user -d lifestrands"]
       interval: 10s
@@ -52,8 +48,7 @@ services:
     volumes:
       - redis-data:/data
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.11
+      - lifestrands-network
     healthcheck:
       test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 10s
@@ -74,8 +69,9 @@ services:
     environment:
       - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@postgres:5432/lifestrands
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379
-      - LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1
+      - LM_STUDIO_BASE_URL=http://10.4.20.10:1234/v1
       - NPC_SERVICE_URL=http://npc-service:8003
+      - CHAT_MODEL_ID=${CHAT_MODEL_ID:-gryphe_codex-24b-small-3.2@q5_k_l}
       - MAX_CONCURRENT_CONVERSATIONS=${MAX_CONCURRENT_CONVERSATIONS:-50}
       - CONVERSATION_TIMEOUT_MINUTES=${CONVERSATION_TIMEOUT_MINUTES:-30}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -84,11 +80,18 @@ services:
     volumes:
       - logs-data:/app/logs
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.21
+      - lifestrands-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - postgres
       - redis
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -104,7 +107,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@postgres:5432/lifestrands
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379
-      - LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1
+      - LM_STUDIO_BASE_URL=http://10.4.20.10:1234/v1
       - ENABLE_EMBEDDINGS=${ENABLE_EMBEDDINGS:-false}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     ports:
@@ -112,11 +115,16 @@ services:
     volumes:
       - logs-data:/app/logs
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.22
+      - lifestrands-network
     depends_on:
       - postgres
       - redis
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -132,8 +140,10 @@ services:
     environment:
       - DATABASE_URL=postgresql://lifestrands_user:${DATABASE_PASSWORD:-lifestrands_password}@postgres:5432/lifestrands
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379
-      - LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1
+      - LM_STUDIO_BASE_URL=http://10.4.20.10:1234/v1
       - NPC_SERVICE_URL=http://npc-service:8003
+      - SUMMARY_MODEL_ID=${SUMMARY_MODEL_ID:-gryphe_codex-24b-small-3.2@q5_k_l}
+      - ANALYSIS_MODEL_ID=${ANALYSIS_MODEL_ID:-gryphe_codex-24b-small-3.2@q5_k_l}
       - SUMMARY_AUTO_APPROVAL_THRESHOLD=${SUMMARY_AUTO_APPROVAL_THRESHOLD:-0.8}
       - SUMMARY_WORKER_CONCURRENCY=${SUMMARY_WORKER_CONCURRENCY:-3}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -142,12 +152,17 @@ services:
     volumes:
       - logs-data:/app/logs
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.23
+      - lifestrands-network
     depends_on:
       - postgres
       - redis
       - npc-service
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -175,11 +190,16 @@ services:
       - logs-data:/app/logs
       - /var/run/docker.sock:/var/run/docker.sock:ro  # For container monitoring
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.24
+      - lifestrands-network
     depends_on:
       - postgres
       - redis
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -206,13 +226,18 @@ services:
     volumes:
       - logs-data:/app/logs
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.25
+      - lifestrands-network
     depends_on:
       - chat-service
       - npc-service
       - summary-service
       - monitor-service
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -235,8 +260,7 @@ services:
       - ./nginx/ssl:/etc/nginx/ssl:ro
       - logs-data:/var/log/nginx
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.30
+      - lifestrands-network
     depends_on:
       - gateway
     restart: unless-stopped
@@ -259,8 +283,7 @@ services:
     volumes:
       - ./pgadmin/servers.json:/pgadmin4/servers.json
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.50
+      - lifestrands-network
     depends_on:
       - postgres
     restart: unless-stopped
@@ -274,8 +297,7 @@ services:
     ports:
       - "8081:8081"
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.51
+      - lifestrands-network
     depends_on:
       - redis
     restart: unless-stopped
@@ -291,13 +313,12 @@ services:
       dockerfile: Dockerfile
     container_name: lifestrands-chat-interface
     environment:
-      - REACT_APP_API_URL=http://localhost:8000
-      - REACT_APP_WS_URL=ws://localhost:8000
+      - VITE_API_URL=http://localhost:8000
+      - VITE_WS_URL=ws://localhost:8000
     ports:
-      - "3000:3000"
+      - "3001:3000"
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.60
+      - lifestrands-network
     depends_on:
       - gateway
     restart: unless-stopped
@@ -309,13 +330,12 @@ services:
       dockerfile: Dockerfile
     container_name: lifestrands-admin-dashboard
     environment:
-      - REACT_APP_API_URL=http://localhost:8000
-      - REACT_APP_WS_URL=ws://localhost:8000
+      - VITE_API_URL=http://localhost:8000
+      - VITE_WS_URL=ws://localhost:8000
     ports:
       - "3002:3000"
     networks:
-      lifestrands-network:
-        ipv4_address: 172.20.0.61
+      - lifestrands-network
     depends_on:
       - gateway
     restart: unless-stopped

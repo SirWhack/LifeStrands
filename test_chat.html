@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Life Strands Chat Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .chat-container { border: 1px solid #ccc; height: 400px; overflow-y: scroll; padding: 10px; margin: 10px 0; }
+        .message { margin: 5px 0; padding: 5px; }
+        .user { background: #e3f2fd; text-align: right; }
+        .npc { background: #f3e5f5; text-align: left; }
+        .system { background: #fff3e0; font-style: italic; }
+        input[type="text"] { width: 70%; padding: 5px; }
+        button { padding: 5px 10px; margin: 0 5px; }
+        .status { padding: 10px; background: #f5f5f5; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Life Strands Chat Test</h1>
+    
+    <div class="status" id="status">
+        Status: <span id="connection-status">Disconnected</span>
+    </div>
+
+    <div>
+        <label>NPC ID: </label>
+        <input type="text" id="npc-id" value="test-npc" placeholder="NPC ID">
+        
+        <label>User ID: </label>
+        <input type="text" id="user-id" value="test-user" placeholder="User ID">
+        
+        <button onclick="startConversation()">Start Conversation</button>
+    </div>
+
+    <div class="chat-container" id="chat-container">
+        <!-- Messages will appear here -->
+    </div>
+
+    <div>
+        <input type="text" id="message-input" placeholder="Type your message..." onkeypress="if(event.key==='Enter') sendMessage()">
+        <button onclick="sendMessage()">Send</button>
+        <button onclick="disconnect()">Disconnect</button>
+    </div>
+
+    <script>
+        let ws = null;
+        let sessionId = null;
+
+        function addMessage(content, type = 'system') {
+            const chatContainer = document.getElementById('chat-container');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.textContent = content;
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function updateStatus(status) {
+            document.getElementById('connection-status').textContent = status;
+        }
+
+        async function startConversation() {
+            const npcId = document.getElementById('npc-id').value;
+            const userId = document.getElementById('user-id').value;
+
+            if (!npcId || !userId) {
+                addMessage('Please enter both NPC ID and User ID', 'system');
+                return;
+            }
+
+            try {
+                // First, create a test NPC if it doesn't exist
+                addMessage('Creating/checking NPC...', 'system');
+                
+                const npcResponse = await fetch(`http://localhost:8003/npcs/${npcId}`, {
+                    method: 'GET'
+                });
+
+                if (!npcResponse.ok) {
+                    // Create a simple test NPC
+                    const createNpcResponse = await fetch('http://localhost:8003/npcs', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            id: npcId,
+                            name: 'Test Character',
+                            background: {
+                                age: 25,
+                                occupation: 'Test NPC',
+                                location: 'Test World'
+                            },
+                            personality: {
+                                traits: ['friendly', 'helpful'],
+                                motivations: ['helping users'],
+                                values: ['kindness']
+                            },
+                            current_status: {
+                                mood: 'happy',
+                                health: 'good',
+                                energy: 'high',
+                                location: 'Test World',
+                                activity: 'waiting to chat'
+                            }
+                        })
+                    });
+
+                    if (createNpcResponse.ok) {
+                        addMessage('Test NPC created successfully!', 'system');
+                    } else {
+                        addMessage('Failed to create NPC: ' + await createNpcResponse.text(), 'system');
+                        return;
+                    }
+                } else {
+                    addMessage('NPC found!', 'system');
+                }
+
+                // Start conversation
+                addMessage('Starting conversation...', 'system');
+                
+                const response = await fetch('http://localhost:8002/conversations/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ npc_id: npcId, user_id: userId })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    sessionId = data.session_id;
+                    
+                    // Connect WebSocket
+                    connectWebSocket();
+                    
+                    addMessage(`Conversation started! Session: ${sessionId}`, 'system');
+                } else {
+                    addMessage('Failed to start conversation: ' + await response.text(), 'system');
+                }
+
+            } catch (error) {
+                addMessage('Error: ' + error.message, 'system');
+            }
+        }
+
+        function connectWebSocket() {
+            if (!sessionId) return;
+
+            ws = new WebSocket(`ws://localhost:8002/ws/${sessionId}`);
+            
+            ws.onopen = function() {
+                updateStatus('Connected');
+                addMessage('WebSocket connected!', 'system');
+            };
+
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'token') {
+                    // Handle streaming response tokens
+                    let lastMessage = document.querySelector('.message.npc:last-child');
+                    if (!lastMessage || lastMessage.dataset.complete) {
+                        lastMessage = document.createElement('div');
+                        lastMessage.className = 'message npc';
+                        lastMessage.textContent = '';
+                        document.getElementById('chat-container').appendChild(lastMessage);
+                    }
+                    lastMessage.textContent += data.content;
+                    document.getElementById('chat-container').scrollTop = document.getElementById('chat-container').scrollHeight;
+                } else if (data.type === 'response_complete') {
+                    let lastMessage = document.querySelector('.message.npc:last-child');
+                    if (lastMessage) {
+                        lastMessage.dataset.complete = 'true';
+                    }
+                } else {
+                    addMessage('Received: ' + JSON.stringify(data), 'system');
+                }
+            };
+
+            ws.onclose = function() {
+                updateStatus('Disconnected');
+                addMessage('WebSocket disconnected', 'system');
+            };
+
+            ws.onerror = function(error) {
+                addMessage('WebSocket error: ' + error, 'system');
+            };
+        }
+
+        async function sendMessage() {
+            const messageInput = document.getElementById('message-input');
+            const message = messageInput.value.trim();
+
+            if (!message || !ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('No connection or empty message', 'system');
+                return;
+            }
+
+            // Add user message to chat
+            addMessage(message, 'user');
+            messageInput.value = '';
+
+            // Send message via WebSocket
+            ws.send(JSON.stringify({
+                type: 'message',
+                content: message
+            }));
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+            }
+            sessionId = null;
+            updateStatus('Disconnected');
+            addMessage('Disconnected from chat', 'system');
+        }
+
+        // Test service availability on page load
+        window.onload = async function() {
+            try {
+                const chatHealth = await fetch('http://localhost:8002/health');
+                const npcHealth = await fetch('http://localhost:8003/health');
+                
+                if (chatHealth.ok && npcHealth.ok) {
+                    addMessage('✅ Services are available! Ready to chat.', 'system');
+                } else {
+                    addMessage('⚠️ Some services may not be available', 'system');
+                }
+            } catch (error) {
+                addMessage('❌ Services not available: ' + error.message, 'system');
+            }
+        };
+    </script>
+</body>
+</html>

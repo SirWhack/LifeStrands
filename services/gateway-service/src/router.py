@@ -35,22 +35,30 @@ class APIRouter:
 
     def _register_default_services(self):
         """Register default service routes"""
+        import os
+        
+        # Get service URLs from environment variables with fallback to Docker names
+        chat_url = os.getenv("CHAT_SERVICE_URL", "http://chat-service:8002")
+        npc_url = os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
+        summary_url = os.getenv("SUMMARY_SERVICE_URL", "http://summary-service:8004")
+        monitor_url = os.getenv("MONITOR_SERVICE_URL", "http://monitor-service:8005")
+        
         default_routes = [
             # LM Studio integration - no direct model service routes needed
-            # Chat Service routes (Docker services)
-            ServiceRoute("/api/conversations/*", "http://chat-service:8002"),
-            ServiceRoute("/api/chat/*", "http://chat-service:8002"),
+            # Chat Service routes
+            ServiceRoute("/api/conversations/*", chat_url),
+            ServiceRoute("/api/chat/*", chat_url),
             # NPC Service routes
-            ServiceRoute("/api/npcs/*", "http://npc-service:8003"),
-            ServiceRoute("/api/npc/*", "http://npc-service:8003"),
-            ServiceRoute("/api/search/*", "http://npc-service:8003"),
+            ServiceRoute("/api/npcs/*", npc_url),
+            ServiceRoute("/api/npc/*", npc_url),
+            ServiceRoute("/api/search/*", npc_url),
             # Summary Service routes
-            ServiceRoute("/api/summaries/*", "http://summary-service:8004"),
-            ServiceRoute("/api/analysis/*", "http://summary-service:8004"),
+            ServiceRoute("/api/summaries/*", summary_url),
+            ServiceRoute("/api/analysis/*", summary_url),
             # Monitor Service routes
-            ServiceRoute("/api/metrics/*", "http://monitor-service:8005"),
-            ServiceRoute("/api/health/*", "http://monitor-service:8005", ["GET"], False),
-            ServiceRoute("/api/alerts/*", "http://monitor-service:8005"),
+            ServiceRoute("/api/metrics/*", monitor_url),
+            ServiceRoute("/api/health/*", monitor_url, ["GET"], False),
+            ServiceRoute("/api/alerts/*", monitor_url),
             # Audio Service routes (Native Windows service)
             ServiceRoute("/api/audio/*", "http://host.docker.internal:8006"),
         ]
@@ -59,10 +67,10 @@ class APIRouter:
 
         # Register services in registry - LM Studio handled directly by chat service
         self.service_registry = {
-            "chat-service": "http://chat-service:8002",
-            "npc-service": "http://npc-service:8003",
-            "summary-service": "http://summary-service:8004",
-            "monitor-service": "http://monitor-service:8005",
+            "chat-service": chat_url,
+            "npc-service": npc_url,
+            "summary-service": summary_url,
+            "monitor-service": monitor_url,
             "audio-service": "http://host.docker.internal:8006",
         }
 
@@ -92,9 +100,9 @@ class APIRouter:
                 json,
                 headers or {}
             )
-            # Return the response body directly for FastAPI
-            if "body" in response:
-                return response["body"]
+            # Return the data directly for FastAPI
+            if "data" in response and response.get("status", 500) < 400:
+                return response["data"]
             return response
         except Exception as e:
             logger.error(f"Error proxying to {service_name}: {e}")

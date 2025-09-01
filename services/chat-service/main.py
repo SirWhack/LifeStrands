@@ -39,6 +39,16 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize chat service: {e}")
         raise
     finally:
+        try:
+            await websocket_handler.shutdown()
+        except Exception as e:
+            logger.debug(f"WebSocket handler shutdown error: {e}")
+        try:
+            # Graceful shutdown for conversation manager (cleanup tasks)
+            if hasattr(conversation_manager, "shutdown"):
+                await conversation_manager.shutdown()
+        except Exception as e:
+            logger.debug(f"Conversation manager shutdown error: {e}")
         logger.info("Chat service shut down")
 
 app = FastAPI(
@@ -87,6 +97,11 @@ async def start_conversation(request: StartConversationRequest):
         logger.error(f"Error starting conversation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# Compatibility route expected by integration tests
+@app.post("/conversations/start", status_code=201)
+async def start_conversation_v2(request: StartConversationRequest):
+    return await start_conversation(request)
+
 @app.post("/conversation/send")
 async def send_message(request: SendMessageRequest):
     """Send message in conversation (non-streaming)"""
@@ -114,12 +129,27 @@ async def end_conversation(session_id: str):
         logger.error(f"Error ending conversation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# Compatibility route
+@app.post("/conversations/{session_id}/end")
+async def end_conversation_v2(session_id: str):
+    return await end_conversation(session_id)
+
 @app.get("/conversation/{session_id}/history")
 async def get_conversation_history(session_id: str):
     """Get conversation message history"""
     try:
         history = await conversation_manager.get_conversation_history(session_id)
         return {"messages": history}
+    except Exception as e:
+        logger.error(f"Error getting conversation history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Compatibility route returning a raw list as expected by tests
+@app.get("/conversations/{session_id}/history")
+async def get_conversation_history_v2(session_id: str):
+    try:
+        history = await conversation_manager.get_conversation_history(session_id)
+        return history
     except Exception as e:
         logger.error(f"Error getting conversation history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -153,6 +183,45 @@ async def get_metrics():
             "status": "error",
             "error": str(e)
         }
+
+# Streaming message endpoint (JSON lines per chunk) for test compatibility
+from fastapi import Request
+from fastapi.responses import StreamingResponse
+
+@app.post("/conversations/{session_id}/message")
+async def send_message_streaming(session_id: str, request: Request):
+    try:
+        body = await request.json()
+        content = body.get("content", "")
+
+        async def token_stream():
+            try:
+                async for chunk in conversation_manager.stream_message(session_id, content):
+                    if chunk:
+                        yield f"{json.dumps({'token': chunk})}\n"
+            except Exception as e:
+                # Emit an error frame then end stream
+                yield f"{json.dumps({'error': str(e)})}\n"
+
+        return StreamingResponse(token_stream(), media_type="application/json")
+    except Exception as e:
+        logger.error(f"Error in streaming endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# LM Studio connectivity check (debug)
+@app.get("/lmstudio/status")
+async def lmstudio_status():
+    import aiohttp
+    url = conversation_manager.lm_studio_url.rstrip("/") + "/models"
+    try:
+        timeout = aiohttp.ClientTimeout(total=10, connect=3, sock_read=7)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as resp:
+                text = await resp.text()
+                return {"url": url, "status": resp.status, "body": text[:1000]}
+    except Exception as e:
+        logger.error(f"LM Studio status check failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -218,24 +287,38 @@ async def websocket_endpoint(websocket: WebSocket):
                     else:
                         session_id = user_conversations[npc_id]
                     
-                    # Get complete response (non-streaming bypass)
+                    # Stream response chunks over WebSocket
                     try:
-                        logger.info(f"Getting complete response for session {session_id}")
-                        complete_response = ""
-                        async for chunk in conversation_manager.process_message(
-                            session_id, 
+                        logger.info(f"Streaming response for session {session_id}")
+                        any_chunk = False
+                        async for chunk in conversation_manager.stream_message(
+                            session_id,
                             user_message
                         ):
-                            complete_response += chunk  # Accumulate complete response
-                        
-                        logger.info(f"Complete response received for session {session_id}: {len(complete_response)} characters")
-                        
-                        # Send complete message in one go
-                        if websocket.client_state.value == 1:  # CONNECTED
-                            logger.info(f"Sending complete message for NPC {npc_id}")
+                            if websocket.client_state.value == 1 and chunk:
+                                any_chunk = True
+                                await websocket.send_text(json.dumps({
+                                    "type": "response_chunk",
+                                    "npc_id": npc_id,
+                                    "chunk": chunk
+                                }))
+
+                        # If no chunks were produced, try to send a complete message body
+                        if not any_chunk and websocket.client_state.value == 1:
+                            logger.info(f"No chunks produced; sending complete message for {session_id}")
+                            complete_response = await conversation_manager._get_complete_response_from_model_chatml(
+                                messages=[{"role": "user", "content": user_message}],
+                                session_id=session_id
+                            )
                             await websocket.send_text(json.dumps({
                                 "type": "message_complete",
                                 "content": complete_response,
+                                "npc_id": npc_id
+                            }))
+                        elif websocket.client_state.value == 1:
+                            # Send stream completion signal
+                            await websocket.send_text(json.dumps({
+                                "type": "response_complete",
                                 "npc_id": npc_id
                             }))
                         else:

@@ -18,13 +18,16 @@ import {
   FormControl,
   InputLabel,
   IconButton,
-  Divider
+  Divider,
+  FormControlLabel,
+  Checkbox
 } from '@mui/material';
 import {
   Send as SendIcon,
   PersonAdd as PersonAddIcon,
   Refresh as RefreshIcon,
   Stop as StopIcon,
+  Close as CloseIcon,
   VolumeUp as SpeakIcon
 } from '@mui/icons-material';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -37,18 +40,23 @@ interface Message {
   content: string;
   timestamp: string;
   isStreaming?: boolean;
+  tokens?: number;
+  durationMs?: number;
 }
 
 const ChatPage: React.FC = () => {
   const { npcId } = useParams<{ npcId: string }>();
   const navigate = useNavigate();
+  // Config from environment (Docker compose passes REACT_APP_*). Fallback to localhost gateway.
+  const apiBase = ((import.meta as any).env?.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+  const wsBase = ((import.meta as any).env?.VITE_WS_URL || 'ws://localhost:8000').replace(/\/$/, '');
   
   // Authentication - using demo auth for development
   const { user, token, isAuthenticated } = useDemoAuth();
   
   // NPC Management - Connect via gateway service for CORS handling
   const { npcs, currentNPC, setCurrentNPC, fetchNPCs, fetchNPC, loading: npcLoading, error: npcError } = useNPC({
-    apiBaseUrl: 'http://localhost:8000', // Connect via gateway service
+    apiBaseUrl: apiBase, // Connect via gateway service (configurable)
     authToken: token || undefined
   });
 
@@ -59,10 +67,12 @@ const ChatPage: React.FC = () => {
   const [streamingMessage, setStreamingMessage] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [devMode, setDevMode] = useState<boolean>(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingMessageRef = useRef<string>('');
   const streamingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingMetricsRef = useRef<{ start: number; tokens: number } | null>(null);
 
   // --- Add refs for stable WebSocket handling as per code review ---
   const currentNPCIdRef = useRef<string | undefined>(undefined);
@@ -106,7 +116,9 @@ const ChatPage: React.FC = () => {
                 id: Date.now().toString(),
                 sender: 'npc' as const,
                 content: finalContent,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                tokens: pendingMetricsRef.current?.tokens,
+                durationMs: pendingMetricsRef.current ? (Date.now() - pendingMetricsRef.current.start) : undefined
               };
               
               setMessages(prev => {
@@ -121,6 +133,7 @@ const ChatPage: React.FC = () => {
             // Clear streaming state
             streamingMessageRef.current = '';
             setStreamingMessage('');
+            pendingMetricsRef.current = null;
           }
           setIsGenerating(false);
           break;
@@ -140,6 +153,12 @@ const ChatPage: React.FC = () => {
             streamingMessageRef.current = updated;
             setStreamingMessage(updated);
             
+            // Dev metrics: approximate token count by chunk count
+            if (!pendingMetricsRef.current) {
+              pendingMetricsRef.current = { start: Date.now(), tokens: 0 };
+            }
+            pendingMetricsRef.current.tokens += 1;
+
             console.log('📝 Chunk:', JSON.stringify(chunk), 'Total in REF:', streamingMessageRef.current.length);
           }
           break;
@@ -160,7 +179,9 @@ const ChatPage: React.FC = () => {
                 id: Date.now().toString(),
                 sender: 'npc' as const,
                 content: completeContent.trim(),
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                tokens: pendingMetricsRef.current?.tokens,
+                durationMs: pendingMetricsRef.current ? (Date.now() - pendingMetricsRef.current.start) : undefined
               };
               
               setMessages(prev => {
@@ -172,6 +193,7 @@ const ChatPage: React.FC = () => {
             // Clear any streaming state
             streamingMessageRef.current = '';
             setStreamingMessage('');
+            pendingMetricsRef.current = null;
           }
           setIsGenerating(false);
           break;
@@ -195,8 +217,8 @@ const ChatPage: React.FC = () => {
 
   // WebSocket for real-time chat - Connect via gateway service for CORS handling
   const webSocketOptions = useMemo(() => ({
-    url: 'ws://localhost:8000/ws', // Primary: Via Gateway Service
-    fallbackUrls: ['ws://localhost:8002/ws'], // Fallback: Direct to Chat Service
+    url: `${wsBase}/ws`, // Primary from env (Gateway by default)
+    fallbackUrls: ['ws://localhost:8002/ws'], // Optional direct Chat service fallback
     enableFallback: true,
     shouldReconnect: true,
     token: token || undefined, // Pass authentication token
@@ -219,7 +241,9 @@ const ChatPage: React.FC = () => {
     sendMessage: sendWSMessage,
     lastMessage,
     connectionError,
-    isTyping
+    isTyping,
+    connect,
+    disconnect
   } = useWebSocket(webSocketOptions);
 
   // Auto-scroll to bottom
@@ -231,14 +255,15 @@ const ChatPage: React.FC = () => {
     scrollToBottom();
   }, [messages, streamingMessage]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount: clear timers and disconnect to end server sessions
   useEffect(() => {
     return () => {
       if (streamingTimeoutRef.current) {
         clearTimeout(streamingTimeoutRef.current);
       }
+      try { disconnect(); } catch {}
     };
-  }, []);
+  }, [disconnect]);
 
   // Handle NPC selection
   const handleNPCChange = useCallback(async (npcId: string) => {
@@ -292,6 +317,8 @@ const ChatPage: React.FC = () => {
 
     setInputMessage('');
     setIsGenerating(true);
+    // Initialize dev metrics timing
+    pendingMetricsRef.current = { start: Date.now(), tokens: 0 };
   }, [inputMessage, currentNPC, sendWSMessage]);
 
   // Handle speaking message
@@ -302,7 +329,7 @@ const ChatPage: React.FC = () => {
       setSpeakingMessageId(messageId);
       
       // Call audio service via gateway
-      const response = await fetch('http://localhost:8000/api/audio/speak', {
+      const response = await fetch(`${apiBase}/api/audio/speak`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -400,6 +427,10 @@ const ChatPage: React.FC = () => {
               color={getConnectionStatusColor() as any}
               size="small"
             />
+            <FormControlLabel
+              control={<Checkbox checked={devMode} onChange={(_, v) => setDevMode(v)} />}
+              label="Dev Mode"
+            />
             
             {/* NPC Selection */}
             <FormControl size="small" sx={{ minWidth: 200 }}>
@@ -418,6 +449,40 @@ const ChatPage: React.FC = () => {
               </Select>
             </FormControl>
             
+            {/* End Conversation */}
+            <Button
+              variant="outlined"
+              color="warning"
+              onClick={async () => {
+                try { disconnect(); } catch {}
+                setMessages([]);
+                setStreamingMessage('');
+                streamingMessageRef.current = '';
+                pendingMetricsRef.current = null;
+                setIsGenerating(false);
+                setTimeout(() => { try { connect(); } catch {} }, 300);
+              }}
+              disabled={connectionState !== 'connected'}
+            >
+              End Conversation
+            </Button>
+            <IconButton
+              aria-label="End conversation"
+              color="warning"
+              onClick={async () => {
+                try { disconnect(); } catch {}
+                setMessages([]);
+                setStreamingMessage('');
+                streamingMessageRef.current = '';
+                pendingMetricsRef.current = null;
+                setIsGenerating(false);
+                setTimeout(() => { try { connect(); } catch {} }, 300);
+              }}
+              disabled={connectionState !== 'connected'}
+            >
+              <CloseIcon />
+            </IconButton>
+
             {/* Refresh NPCs */}
             <IconButton onClick={fetchNPCs} disabled={npcLoading}>
               <RefreshIcon />
@@ -511,6 +576,12 @@ const ChatPage: React.FC = () => {
                     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.5 }}>
                       <Typography variant="caption" sx={{ opacity: 0.7 }}>
                         {new Date(message.timestamp).toLocaleTimeString()}
+                        {devMode && message.sender === 'npc' && (
+                          <>
+                            {' '}• {typeof message.tokens === 'number' ? `${message.tokens} tokens` : '—'}{' '}
+                            • {typeof message.durationMs === 'number' ? `${Math.max(1, Math.round(message.durationMs))} ms` : '—'}
+                          </>
+                        )}
                       </Typography>
                       {message.sender === 'npc' && (
                         <IconButton

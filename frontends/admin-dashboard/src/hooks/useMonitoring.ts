@@ -287,7 +287,8 @@ export const useMonitoring = (options: UseMonitoringOptions = {}): UseMonitoring
         wsRef.current.close();
       }
 
-      const wsUrl = 'ws://localhost:8006/ws';
+      // Route monitoring websocket via Gateway for consistency
+      const wsUrl = 'ws://localhost:8000/monitor/ws';
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
