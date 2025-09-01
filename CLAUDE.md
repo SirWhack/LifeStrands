@@ -264,3 +264,4 @@ Models are stored in the `Models/` directory:
 - **Caching**: Frequent NPC data cached in Redis with TTL
 - **Memory Management**: Model service automatically manages GPU memory
 - **Context Optimization**: Chat service optimizes prompt size for model efficiency
+- make sure to check docker contianer if you change it, sometimes changes are not refelected and they need to be rebuilt

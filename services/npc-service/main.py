@@ -4,13 +4,15 @@ import os
 from contextlib import asynccontextmanager
 from typing import Dict, List, Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from src.npc_repository import NPCRepository
 from src.life_strand_schema import LifeStrand, NPCUpdate
 from src.embedding_manager import embedding_manager
+from src.auth import auth_manager
+from src.error_handler import handle_service_error, NotFoundError, ValidationError, DatabaseError
 
 # Graceful imports for optional monitoring components
 try:
@@ -138,19 +140,13 @@ app = FastAPI(
 )
 
 # Add CORS middleware for frontend access
+allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001,http://localhost:3002").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # React frontend
-        "http://localhost:3001",  # Alternative frontend port
-        "http://localhost:3002",  # Admin dashboard
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "http://127.0.0.1:3002"
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
 )
 
 @app.get("/health")
@@ -166,7 +162,7 @@ async def health_check():
     }
 
 @app.post("/npc", response_model=Dict[str, str])
-async def create_npc(request: CreateNPCRequest):
+async def create_npc(request: CreateNPCRequest, current_user: Dict[str, Any] = Depends(auth_manager.require_auth)):
     """Create a new NPC with Life Strand data"""
     try:
         # Convert Pydantic model to dict for repository
@@ -191,14 +187,13 @@ async def get_npc(npc_id: str):
     try:
         life_strand = await npc_repository.get_npc(npc_id)
         if not life_strand:
-            raise HTTPException(status_code=404, detail="NPC not found")
+            raise NotFoundError("NPC", npc_id)
         return life_strand
         
-    except HTTPException:
-        raise
+    except (NotFoundError, ValidationError, DatabaseError) as e:
+        raise handle_service_error(e, "get_npc", npc_id)
     except Exception as e:
-        logger.error(f"Error getting NPC {npc_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise handle_service_error(e, "get_npc", npc_id)
 
 @app.get("/npc/{npc_id}/prompt")
 async def get_npc_for_prompt(npc_id: str):
@@ -242,7 +237,7 @@ async def get_npc_for_prompt(npc_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/npc/{npc_id}")
-async def update_npc(npc_id: str, request: UpdateNPCRequest):
+async def update_npc(npc_id: str, request: UpdateNPCRequest, current_user: Dict[str, Any] = Depends(auth_manager.require_auth)):
     """Update NPC Life Strand with new information"""
     try:
         # Convert Pydantic model to dict for repository
@@ -266,7 +261,7 @@ async def update_npc(npc_id: str, request: UpdateNPCRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/npc/{npc_id}")
-async def delete_npc(npc_id: str):
+async def delete_npc(npc_id: str, current_user: Dict[str, Any] = Depends(auth_manager.require_auth)):
     """Delete an NPC"""
     try:
         success = await npc_repository.archive_npc(npc_id)
@@ -345,7 +340,7 @@ async def get_npc_memories(npc_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/npc/{npc_id}/memory")
-async def add_npc_memory(npc_id: str, memory: Dict[str, Any]):
+async def add_npc_memory(npc_id: str, memory: Dict[str, Any], current_user: Dict[str, Any] = Depends(auth_manager.require_auth)):
     """Add a new memory to an NPC"""
     try:
         success = await npc_repository.add_memory(npc_id, memory)

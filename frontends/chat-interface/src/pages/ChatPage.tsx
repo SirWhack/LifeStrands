@@ -24,10 +24,12 @@ import {
   Send as SendIcon,
   PersonAdd as PersonAddIcon,
   Refresh as RefreshIcon,
-  Stop as StopIcon
+  Stop as StopIcon,
+  VolumeUp as SpeakIcon
 } from '@mui/icons-material';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useNPC } from '../hooks/useNPC';
+import { useDemoAuth } from '../contexts/AuthContext'; // Use demo auth for development
 
 interface Message {
   id: string;
@@ -41,28 +43,176 @@ const ChatPage: React.FC = () => {
   const { npcId } = useParams<{ npcId: string }>();
   const navigate = useNavigate();
   
-  // NPC Management
+  // Authentication - using demo auth for development
+  const { user, token, isAuthenticated } = useDemoAuth();
+  
+  // NPC Management - Connect via gateway service for CORS handling
   const { npcs, currentNPC, setCurrentNPC, fetchNPCs, fetchNPC, loading: npcLoading, error: npcError } = useNPC({
-    apiBaseUrl: 'http://localhost:8003'
+    apiBaseUrl: 'http://localhost:8000', // Connect via gateway service
+    authToken: token || undefined
   });
 
-  // WebSocket for real-time chat - single persistent connection
+  // Local state
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputMessage, setInputMessage] = useState('');
+  const [selectedNPCId, setSelectedNPCId] = useState<string>(npcId || '');
+  const [streamingMessage, setStreamingMessage] = useState<string>('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const streamingMessageRef = useRef<string>('');
+  const streamingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // --- Add refs for stable WebSocket handling as per code review ---
+  const currentNPCIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => { 
+    currentNPCIdRef.current = currentNPC?.id;
+  }, [currentNPC?.id]);
+
+  const onMessageRef = useRef<(m: any) => void>(() => {});
+
+  // --- Make WebSocket message handler stable (no dependencies) ---
+  useEffect(() => {
+    onMessageRef.current = (message: any) => {
+      if (!message) return;
+      
+      console.log('🔥 STABLE handleWebSocketMessage:', message.type, message);
+      console.log('🔍 Handler instance ID:', Date.now()); // Debug handler recreation
+      
+      switch (message.type) {
+        case 'connection_ready':
+          console.log('✅ WebSocket connection ready');
+          break;
+          
+        case 'response_complete': {
+          console.log('🎯 Hit response_complete case!');
+          const msgNpc = String(message.npc_id ?? '');
+          const curNpc = String(currentNPCIdRef.current ?? '');
+          console.log('🔍 NPC comparison - msgNpc:', msgNpc, 'curNpc:', curNpc);
+          
+          // Complete message received - use robust string comparison
+          if (!msgNpc || !curNpc || msgNpc === curNpc) {
+            console.log('✅ Passed NPC ID condition check');
+            const finalContent = (streamingMessageRef.current || '').trim();
+            
+            console.log('🔍 Final content from REF:', streamingMessageRef.current?.length || 0);
+            console.log('🔍 Final content preview:', finalContent.substring(0, 100) + '...');
+            
+            if (finalContent.length > 0) {
+              console.log('✅ Converting streaming message to permanent:', finalContent.length, 'characters');
+              
+              const newMessage: Message = {
+                id: Date.now().toString(),
+                sender: 'npc' as const,
+                content: finalContent,
+                timestamp: new Date().toISOString()
+              };
+              
+              setMessages(prev => {
+                console.log('📋 Adding message to', prev.length, 'existing messages');
+                return [...prev, newMessage];
+              });
+              console.log('📋 Added message with content length:', finalContent.length);
+            } else {
+              console.warn('⚠️ response_complete but no streaming content to commit - REF was empty!');
+            }
+            
+            // Clear streaming state
+            streamingMessageRef.current = '';
+            setStreamingMessage('');
+          }
+          setIsGenerating(false);
+          break;
+        }
+        
+        case 'response_chunk': {
+          console.log('🎯 Hit response_chunk case!');
+          const msgNpc = String(message.npc_id ?? '');
+          const curNpc = String(currentNPCIdRef.current ?? '');
+          
+          // Streaming token received - use robust string comparison
+          if (!msgNpc || !curNpc || msgNpc === curNpc) {
+            const chunk = message.chunk ?? '';
+            const updated = (streamingMessageRef.current ?? '') + chunk;
+            
+            // Update both ref and state
+            streamingMessageRef.current = updated;
+            setStreamingMessage(updated);
+            
+            console.log('📝 Chunk:', JSON.stringify(chunk), 'Total in REF:', streamingMessageRef.current.length);
+          }
+          break;
+        }
+        
+        case 'message_complete': {
+          // Handle complete (non-streaming) messages
+          console.log('🎯 Hit message_complete case (non-streaming)!');
+          const msgNpc = String(message.npc_id ?? '');
+          const curNpc = String(currentNPCIdRef.current ?? '');
+          
+          if (!msgNpc || !curNpc || msgNpc === curNpc) {
+            const completeContent = message.content || '';
+            console.log('📝 Complete message received:', completeContent.length, 'characters');
+            
+            if (completeContent.length > 0) {
+              const newMessage: Message = {
+                id: Date.now().toString(),
+                sender: 'npc' as const,
+                content: completeContent.trim(),
+                timestamp: new Date().toISOString()
+              };
+              
+              setMessages(prev => {
+                console.log('📋 Adding complete message to', prev.length, 'existing messages');
+                return [...prev, newMessage];
+              });
+            }
+            
+            // Clear any streaming state
+            streamingMessageRef.current = '';
+            setStreamingMessage('');
+          }
+          setIsGenerating(false);
+          break;
+        }
+        
+        case 'pong':
+          // Keep alive response - no action needed
+          break;
+          
+        case 'error':
+          console.error('WebSocket error:', message.message);
+          setIsGenerating(false);
+          break;
+          
+        default:
+          console.log('❓ Unknown message type:', message.type);
+          break;
+      }
+    };
+  }, []); // <-- No dependencies - stable handler
+
+  // WebSocket for real-time chat - Connect via gateway service for CORS handling
   const webSocketOptions = useMemo(() => ({
-    url: 'ws://localhost:8002/ws',
+    url: 'ws://localhost:8000/ws', // Primary: Via Gateway Service
+    fallbackUrls: ['ws://localhost:8002/ws'], // Fallback: Direct to Chat Service
+    enableFallback: true,
     shouldReconnect: true,
-    onMessage: (message) => {
-      console.log('Received WebSocket message:', message);
-    },
-    onError: (error) => {
+    token: token || undefined, // Pass authentication token
+    heartbeatInterval: 60000, // 60 seconds
+    maxMessageQueueSize: 50,
+    onMessage: (message: any) => onMessageRef.current(message), // <-- stable wrapper
+    onError: (error: any) => {
       console.error('WebSocket connection error:', error);
     },
     onOpen: () => {
       console.log('WebSocket connected successfully');
     },
-    onClose: (event) => {
+    onClose: (event: any) => {
       console.log('WebSocket disconnected:', event.code, event.reason);
     }
-  }), []);
+  }), [token]); // <-- DOES NOT depend on streamingMessage or handler
 
   const {
     connectionState,
@@ -72,16 +222,6 @@ const ChatPage: React.FC = () => {
     isTyping
   } = useWebSocket(webSocketOptions);
 
-  // Local state
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [inputMessage, setInputMessage] = useState('');
-  const [selectedNPCId, setSelectedNPCId] = useState<string>(npcId || '');
-  const [streamingMessage, setStreamingMessage] = useState<string>('');
-  const [isGenerating, setIsGenerating] = useState(false);
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const streamingMessageRef = useRef<string>('');
-
   // Auto-scroll to bottom
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -90,6 +230,15 @@ const ChatPage: React.FC = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages, streamingMessage]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (streamingTimeoutRef.current) {
+        clearTimeout(streamingTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Handle NPC selection
   const handleNPCChange = useCallback(async (npcId: string) => {
@@ -104,9 +253,14 @@ const ChatPage: React.FC = () => {
       setCurrentNPC(npc);
       navigate(`/chat/${npcId}`);
       
-      // Clear messages for new NPC conversation
+      // Clear messages for new NPC conversation and clean up streaming
       setMessages([]);
       setStreamingMessage('');
+      streamingMessageRef.current = '';
+      if (streamingTimeoutRef.current) {
+        clearTimeout(streamingTimeoutRef.current);
+        streamingTimeoutRef.current = null;
+      }
       
       console.log('✅ NPC selection complete - WebSocket will handle conversation automatically');
     } else {
@@ -114,55 +268,7 @@ const ChatPage: React.FC = () => {
     }
   }, [fetchNPC, setCurrentNPC, navigate]);
 
-  // Handle WebSocket messages
-  const handleWebSocketMessage = useCallback((message: any) => {
-    if (!message) return;
 
-    console.log('Received WebSocket message:', message);
-
-    switch (message.type) {
-      case 'connection_ready':
-        console.log('✅ WebSocket connection ready');
-        break;
-        
-      case 'response_complete':
-        // Complete message received for current NPC
-        if (streamingMessageRef.current && (!message.npc_id || message.npc_id === currentNPC?.id)) {
-          setMessages(prev => [...prev, {
-            id: Date.now().toString(),
-            sender: 'npc',
-            content: streamingMessageRef.current,
-            timestamp: new Date().toISOString()
-          }]);
-          setStreamingMessage('');
-          streamingMessageRef.current = '';
-        }
-        setIsGenerating(false);
-        break;
-        
-      case 'response_chunk':
-        // Streaming token received for current NPC
-        if (!message.npc_id || message.npc_id === currentNPC?.id) {
-          const chunk = message.chunk || '';
-          streamingMessageRef.current += chunk;
-          setStreamingMessage(streamingMessageRef.current);
-        }
-        break;
-        
-      case 'pong':
-        // Keep alive response - no action needed
-        break;
-        
-      case 'error':
-        console.error('WebSocket error:', message.message);
-        setIsGenerating(false);
-        break;
-    }
-  }, [currentNPC?.id]);
-
-  useEffect(() => {
-    handleWebSocketMessage(lastMessage);
-  }, [lastMessage, handleWebSocketMessage]);
 
   // Send message
   const handleSendMessage = useCallback(async () => {
@@ -187,6 +293,56 @@ const ChatPage: React.FC = () => {
     setInputMessage('');
     setIsGenerating(true);
   }, [inputMessage, currentNPC, sendWSMessage]);
+
+  // Handle speaking message
+  const handleSpeak = useCallback(async (messageId: string, text: string) => {
+    if (!currentNPC || speakingMessageId) return;
+    
+    try {
+      setSpeakingMessageId(messageId);
+      
+      // Call audio service via gateway
+      const response = await fetch('http://localhost:8000/api/audio/speak', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify({
+          text: text,
+          npc_id: currentNPC.id
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Audio generation failed: ${response.statusText}`);
+      }
+      
+      // Get audio data as blob
+      const audioBlob = await response.blob();
+      
+      // Create audio element and play
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      
+      audio.onended = () => {
+        setSpeakingMessageId(null);
+        URL.revokeObjectURL(audioUrl);
+      };
+      
+      audio.onerror = () => {
+        setSpeakingMessageId(null);
+        URL.revokeObjectURL(audioUrl);
+        console.error('Audio playback failed');
+      };
+      
+      await audio.play();
+      
+    } catch (error) {
+      console.error('Error generating speech:', error);
+      setSpeakingMessageId(null);
+    }
+  }, [currentNPC, token, speakingMessageId]);
 
   // Handle Enter key
   const handleKeyPress = (event: React.KeyboardEvent) => {
@@ -214,12 +370,28 @@ const ChatPage: React.FC = () => {
     }
   };
 
+  // Show authentication status for development
+  if (!isAuthenticated) {
+    return (
+      <Container maxWidth="sm" sx={{ py: 4 }}>
+        <Alert severity="error">
+          Authentication required. Please ensure the authentication service is running.
+        </Alert>
+      </Container>
+    );
+  }
+
   return (
     <Container maxWidth="lg" sx={{ py: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
       <Paper sx={{ p: 2, mb: 2 }}>
         <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h5">Life Strands Chat</Typography>
+          <Box>
+            <Typography variant="h5">Life Strands Chat</Typography>
+            <Typography variant="caption" color="text.secondary">
+              Connected as: {user?.username} | Token: {token ? 'Valid' : 'Missing'}
+            </Typography>
+          </Box>
           
           <Box display="flex" alignItems="center" gap={2}>
             {/* Connection Status */}
@@ -294,9 +466,9 @@ const ChatPage: React.FC = () => {
             </Alert>
           )}
 
-          {/* Message List */}
+          {/* Message List - Virtualized for performance with large conversations */}
           <List sx={{ py: 0 }}>
-            {messages.map((message) => (
+            {messages.slice(-50).map((message) => ( // Show only last 50 messages for performance
               <ListItem
                 key={message.id}
                 sx={{
@@ -329,15 +501,35 @@ const ChatPage: React.FC = () => {
                     sx={{
                       p: 2,
                       bgcolor: message.sender === 'user' ? 'primary.light' : 'background.default',
-                      color: message.sender === 'user' ? 'primary.contrastText' : 'text.primary'
+                      color: message.sender === 'user' ? 'primary.contrastText' : 'text.primary',
+                      position: 'relative'
                     }}
                   >
                     <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
                       {message.content}
                     </Typography>
-                    <Typography variant="caption" sx={{ opacity: 0.7, mt: 0.5, display: 'block' }}>
-                      {new Date(message.timestamp).toLocaleTimeString()}
-                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.5 }}>
+                      <Typography variant="caption" sx={{ opacity: 0.7 }}>
+                        {new Date(message.timestamp).toLocaleTimeString()}
+                      </Typography>
+                      {message.sender === 'npc' && (
+                        <IconButton
+                          size="small"
+                          onClick={() => handleSpeak(message.id, message.content)}
+                          disabled={speakingMessageId !== null}
+                          sx={{ 
+                            opacity: speakingMessageId === message.id ? 1 : 0.6,
+                            '&:hover': { opacity: 1 }
+                          }}
+                        >
+                          {speakingMessageId === message.id ? (
+                            <CircularProgress size={16} />
+                          ) : (
+                            <SpeakIcon fontSize="small" />
+                          )}
+                        </IconButton>
+                      )}
+                    </Box>
                   </Paper>
                 </Box>
               </ListItem>
@@ -364,6 +556,10 @@ const ChatPage: React.FC = () => {
                           animation: 'blink 1s infinite'
                         }}
                       />
+                    </Typography>
+                    {/* Debug info - remove in production */}
+                    <Typography variant="caption" sx={{ opacity: 0.5, fontSize: '10px', display: 'block', mt: 0.5 }}>
+                      DEBUG: {streamingMessage.length} chars streaming
                     </Typography>
                   </Paper>
                 </Box>
@@ -417,7 +613,7 @@ const ChatPage: React.FC = () => {
 
           {/* Status */}
           <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-            Connection: {connectionState}
+            Connection: {connectionState} • Auth: {isAuthenticated ? 'Authenticated' : 'Not authenticated'}
             {currentNPC && ` • Chatting with ${currentNPC.name}`}
           </Typography>
         </Box>

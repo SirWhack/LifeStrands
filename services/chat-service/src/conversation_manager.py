@@ -51,7 +51,7 @@ class ConversationManager:
         self.redis_client: Optional[redis.Redis] = None
         self.active_sessions: Dict[str, ConversationSession] = {}
         self.cleanup_interval = 300  # 5 minutes
-        self.model_service_url = os.getenv("MODEL_SERVICE_URL", "http://host.docker.internal:8001")
+        self.lm_studio_url = os.getenv("LM_STUDIO_BASE_URL", "http://host.docker.internal:1234/v1")
         self.npc_service_url = os.getenv("NPC_SERVICE_URL", "http://npc-service:8003")
         
     async def initialize(self):
@@ -123,23 +123,29 @@ class ConversationManager:
             # Get NPC data
             npc_data = await self._get_npc_data(session.npc_id)
             
-            # Build conversation context
+            # Build ChatML format messages
             system_prompt = context_builder.build_system_prompt(npc_data)
-            conversation_context = context_builder.build_conversation_context(
-                npc_data, session.messages
-            )
             
-            # Combine prompts
-            full_prompt = f"{system_prompt}\n\n{conversation_context}\n\nUser: {message}\nAssistant:"
+            # Create ChatML message structure
+            messages = [
+                {"role": "system", "content": system_prompt}
+            ]
             
-            # Stream response from model service
-            response_chunks = []
-            async for chunk in self._stream_from_model(full_prompt, session_id):
-                response_chunks.append(chunk)
-                yield chunk
-                
+            # Add conversation history in ChatML format
+            for msg in session.messages[-10:]:  # Last 10 messages to stay within context
+                role = "assistant" if msg["role"] == "assistant" else "user"
+                messages.append({"role": role, "content": msg["content"]})
+            
+            # Add current user message
+            messages.append({"role": "user", "content": message})
+            
+            # Get complete response from model service (non-streaming for now)
+            complete_response = await self._get_complete_response_from_model_chatml(messages, session_id)
+            
+            # Send complete response
+            yield complete_response
+            
             # Store complete response
-            complete_response = "".join(response_chunks)
             session.add_message("assistant", complete_response)
             
             # Update session in Redis
@@ -291,41 +297,128 @@ class ConversationManager:
             logger.error(f"Error getting NPC data for {npc_id}: {e}")
             return {}
             
-    async def _stream_from_model(self, prompt: str, session_id: str) -> AsyncGenerator[str, None]:
-        """Stream response from model service (SSE framing)."""
+    async def _stream_from_model_chatml(self, messages: List[Dict], session_id: str) -> AsyncGenerator[str, None]:
+        """Stream response from LM Studio using OpenAI-compatible API."""
         import aiohttp
         timeout = aiohttp.ClientTimeout(total=300, connect=10, sock_read=300)
+        
+        logger.info(f"Using currently loaded model in LM Studio for session {session_id}")
+        
+        # OpenAI-compatible payload - omit model to use whatever is loaded
         payload = {
-            "prompt": prompt,
-            "model_type": "chat",
-            "max_tokens": 512,
+            "messages": messages,  # Proper ChatML message structure
+            "max_tokens": 150,  # Shorter responses
             "temperature": 0.7,
             "top_p": 0.9,
             "stream": True,
+            "stop": ["\n\nUser:", "User:", "\n\n###", "###"]  # Stop sequences
         }
+        
+        logger.info(f"Streaming from LM Studio for session {session_id}")
+        
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(f"{self.model_service_url}/generate", json=payload) as resp:
+                async with session.post(f"{self.lm_studio_url}/chat/completions", json=payload) as resp:
                     resp.raise_for_status()
-                    async for raw in resp.content:
-                        if not raw:
+                    
+                    chunk_count = 0
+                    token_count = 0
+                    max_tokens = 150  # Hard limit
+                    
+                    async for line in resp.content:
+                        if not line:
                             continue
-                        line = raw.decode(errors="ignore").strip()
-                        if not line.startswith("data: "):
+                            
+                        line_str = line.decode(errors="ignore").strip()
+                        
+                        # Skip empty lines and non-data lines
+                        if not line_str or not line_str.startswith("data: "):
                             continue
-                        chunk = line[len("data: "):]
+                            
+                        # Extract JSON data
+                        data_str = line_str[6:]  # Remove "data: " prefix
+                        
+                        # Handle [DONE] marker
+                        if data_str.strip() == "[DONE]":
+                            logger.info(f"LM Studio streaming complete for session {session_id} ({chunk_count} chunks)")
+                            break
+                            
                         try:
-                            obj = json.loads(chunk)
+                            data = json.loads(data_str)
+                            
+                            # Extract content from OpenAI format
+                            choices = data.get("choices", [])
+                            if choices:
+                                choice = choices[0]
+                                delta = choice.get("delta", {})
+                                content = delta.get("content", "")
+                                
+                                # Check if generation is complete
+                                if choice.get("finish_reason") in ["stop", "length"]:
+                                    logger.info(f"LM Studio generation finished: {choice.get('finish_reason')} for session {session_id}")
+                                    break
+                                    
+                                if content:
+                                    chunk_count += 1
+                                    token_count += len(content.split())  # Rough token count
+                                    
+                                    # Hard stop at token limit
+                                    if token_count >= max_tokens:
+                                        logger.info(f"Reached token limit ({max_tokens}) for session {session_id}")
+                                        yield content
+                                        break
+                                        
+                                    yield content
+                                    
                         except json.JSONDecodeError:
                             continue
-                        if obj.get("done"):
-                            break
-                        token = obj.get("token")
-                        if token is not None:
-                            yield token
+                            
+                    logger.info(f"Streaming generator exhausted for session {session_id} ({chunk_count} total chunks)")
+                            
         except Exception as e:
-            logger.error(f"Error streaming from model service: {e}")
+            logger.error(f"Error streaming from LM Studio: {e}")
             raise
+    
+    async def _get_complete_response_from_model_chatml(self, messages: List[Dict], session_id: str) -> str:
+        """Get complete response from LM Studio using OpenAI-compatible API."""
+        import aiohttp
+        timeout = aiohttp.ClientTimeout(total=300, connect=10, sock_read=300)
+        
+        logger.info(f"Getting complete response from LM Studio for session {session_id}")
+        
+        # OpenAI-compatible payload - omit model to use whatever is loaded, no streaming
+        payload = {
+            "messages": messages,  # Proper ChatML message structure
+            "max_tokens": 150,  # Shorter responses
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "stream": False,  # No streaming
+            "stop": ["\n\nUser:", "User:", "\n\n###", "###"]  # Stop sequences
+        }
+        
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(f"{self.lm_studio_url}/chat/completions", json=payload) as resp:
+                    resp.raise_for_status()
+                    
+                    response_data = await resp.json()
+                    
+                    # Extract content from OpenAI format
+                    choices = response_data.get("choices", [])
+                    if choices:
+                        choice = choices[0]
+                        message = choice.get("message", {})
+                        content = message.get("content", "")
+                        
+                        logger.info(f"LM Studio complete response for session {session_id}: {len(content)} characters")
+                        return content.strip()
+                    
+                    logger.warning(f"No choices in LM Studio response for session {session_id}")
+                    return ""
+                            
+        except Exception as e:
+            logger.error(f"Error getting complete response from LM Studio: {e}")
+            return f"Sorry, I encountered an error: {str(e)}"
             
     async def _queue_for_summary(self, session: ConversationSession):
         """Queue conversation for summary generation"""

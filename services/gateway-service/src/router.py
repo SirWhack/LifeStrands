@@ -36,16 +36,13 @@ class APIRouter:
     def _register_default_services(self):
         """Register default service routes"""
         default_routes = [
-            # Model Service routes (native Windows service)
-            ServiceRoute("/api/model/status", "http://host.docker.internal:8001", ["GET"], False),
-            ServiceRoute("/api/model/switch/*", "http://host.docker.internal:8001", ["POST"]),
-            ServiceRoute("/api/model/generate/*", "http://host.docker.internal:8001", ["POST"]),
-            ServiceRoute("/api/model/*", "http://host.docker.internal:8001"),
+            # LM Studio integration - no direct model service routes needed
             # Chat Service routes (Docker services)
             ServiceRoute("/api/conversations/*", "http://chat-service:8002"),
             ServiceRoute("/api/chat/*", "http://chat-service:8002"),
             # NPC Service routes
             ServiceRoute("/api/npcs/*", "http://npc-service:8003"),
+            ServiceRoute("/api/npc/*", "http://npc-service:8003"),
             ServiceRoute("/api/search/*", "http://npc-service:8003"),
             # Summary Service routes
             ServiceRoute("/api/summaries/*", "http://summary-service:8004"),
@@ -54,18 +51,55 @@ class APIRouter:
             ServiceRoute("/api/metrics/*", "http://monitor-service:8005"),
             ServiceRoute("/api/health/*", "http://monitor-service:8005", ["GET"], False),
             ServiceRoute("/api/alerts/*", "http://monitor-service:8005"),
+            # Audio Service routes (Native Windows service)
+            ServiceRoute("/api/audio/*", "http://host.docker.internal:8006"),
         ]
         for route in default_routes:
             self.routes.append(route)
 
-        # Register services in registry
+        # Register services in registry - LM Studio handled directly by chat service
         self.service_registry = {
-            "model-service": "http://host.docker.internal:8001",
             "chat-service": "http://chat-service:8002",
             "npc-service": "http://npc-service:8003",
             "summary-service": "http://summary-service:8004",
             "monitor-service": "http://monitor-service:8005",
+            "audio-service": "http://host.docker.internal:8006",
         }
+
+    async def proxy_request(self, service_name: str, method: str, path: str, json: Dict[str, Any] = None, headers: Dict[str, str] = None) -> Dict[str, Any]:
+        """Proxy a request to a specific service"""
+        if service_name not in self.service_registry:
+            logger.error(f"Unknown service: {service_name}")
+            return {"status": 404, "error": "Service not found", "message": f"Service '{service_name}' not found"}
+        
+        service_url = self.service_registry[service_name]
+        
+        # For NPC service, map the path correctly
+        if service_name == "npc-service" and path.startswith("/"):
+            # Remove /api/npc prefix for NPC service calls
+            if path.startswith("/api/npc/"):
+                downstream_path = path.replace("/api/npc/", "/")
+            else:
+                downstream_path = path
+        else:
+            downstream_path = path
+            
+        try:
+            response = await self._forward_request(
+                service_url,
+                downstream_path,
+                method,
+                json,
+                headers or {}
+            )
+            # Return the response body directly for FastAPI
+            if "body" in response:
+                return response["body"]
+            return response
+        except Exception as e:
+            logger.error(f"Error proxying to {service_name}: {e}")
+            from fastapi import HTTPException
+            raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
 
     async def route_request(
         self,
@@ -194,6 +228,7 @@ class APIRouter:
                 "metrics/": "/metrics/",
                 "health/": "/health/",
                 "alerts/": "/alerts/",
+                "audio/": "/",
             }
             for prefix, replacement in service_prefixes.items():
                 if path.startswith(prefix):

@@ -16,15 +16,18 @@ class NPCRepository:
         self.database_url = database_url or "postgresql://user:pass@localhost/lifestrands"
         self.pool: Optional[asyncpg.Pool] = None
         self.embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "384"))
+        self.min_pool_size = int(os.getenv("DB_MIN_POOL_SIZE", "5"))
+        self.max_pool_size = int(os.getenv("DB_MAX_POOL_SIZE", "20"))
+        self.command_timeout = int(os.getenv("DB_COMMAND_TIMEOUT", "30"))
         
     async def initialize(self):
         """Initialize database connection pool"""
         try:
             self.pool = await asyncpg.create_pool(
                 self.database_url,
-                min_size=5,
-                max_size=20,
-                command_timeout=60
+                min_size=self.min_pool_size,
+                max_size=self.max_pool_size,
+                command_timeout=self.command_timeout
             )
             
             # Test connection and ensure pgvector setup
@@ -64,10 +67,10 @@ class NPCRepository:
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_npcs_updated_at ON npcs(updated_at)")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_npcs_traits_gin ON npcs USING GIN (personality_traits jsonb_path_ops)")
                 
-                # Vector index (cosine distance for embeddings)
+                # Vector index (L2 distance for normalized embeddings)
                 await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_npcs_embedding 
-                    ON npcs USING ivfflat (embedding vector_cosine_ops) 
+                    ON npcs USING ivfflat (embedding vector_l2_ops) 
                     WITH (lists = 100)
                 """)
                 
@@ -514,11 +517,10 @@ class NPCRepository:
     async def upsert_embedding(self, npc_id: str, vector: List[float]) -> None:
         """Store/overwrite the embedding vector on the npcs row"""
         try:
-            literal = "[" + ",".join(f"{x:.6f}" for x in vector) + "]"
             async with self.pool.acquire() as conn:
                 await conn.execute(
-                    "UPDATE npcs SET embedding = $2::vector, updated_at = $3 WHERE id = $1",
-                    npc_id, literal, datetime.utcnow()
+                    "UPDATE npcs SET embedding = $2, updated_at = $3 WHERE id = $1",
+                    npc_id, vector, datetime.utcnow()
                 )
         except Exception as e:
             logger.error(f"Error upserting embedding for {npc_id}: {e}")
@@ -539,18 +541,17 @@ class NPCRepository:
     async def search_by_embedding(self, query_vector: List[float], limit: int = 10) -> List[Dict[str, Any]]:
         """KNN search using pgvector; returns basic info and similarity"""
         try:
-            literal = "[" + ",".join(f"{x:.6f}" for x in query_vector) + "]"
             async with self.pool.acquire() as conn:
                 rows = await conn.fetch(
                     """
                     SELECT id, name, location, faction,
-                           (1 - (embedding <=> $1::vector)) AS similarity
+                           (1 / (1 + (embedding <-> $1))) AS similarity
                     FROM npcs
                     WHERE embedding IS NOT NULL AND status != 'archived'
-                    ORDER BY embedding <=> $1::vector DESC
+                    ORDER BY embedding <-> $1
                     LIMIT $2
                     """,
-                    literal, limit
+                    query_vector, limit
                 )
             return [dict(r) for r in rows]
         except Exception as e:

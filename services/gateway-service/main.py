@@ -4,10 +4,12 @@ import time
 from contextlib import asynccontextmanager
 from typing import Dict, List, Any
 
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+import websockets
+import json
 
 from src.auth import AuthManager
 from src.router import APIRouter as ServiceRouter
@@ -91,7 +93,7 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "services": await service_router.get_service_health()
+        "services": await service_router.health_check_services()
     }
 
 @app.post("/auth/login", response_model=TokenResponse)
@@ -147,65 +149,7 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
         "role": current_user.get("role")
     }
 
-# Model Service Routes
-@app.post("/model/generate")
-async def model_generate(
-    request: Dict[str, Any]
-):
-    """Proxy to model service for text generation"""
-    # Handle streaming requests
-    if request.get("stream"):
-        import json
-        from fastapi.responses import StreamingResponse
-        
-        async def generate_stream():
-            try:
-                # Proxy streaming request to model service
-                async for chunk in service_router.proxy_stream_request(
-                    "model-service",
-                    "POST", 
-                    "/generate",
-                    json=request
-                ):
-                    # Forward streaming chunks
-                    yield chunk
-            except asyncio.CancelledError:
-                logger.info("Client disconnected from SSE stream")
-                raise
-            # Send completion signal
-            completion_data = json.dumps({"done": True})
-            yield f"data: {completion_data}\n\n"
-        
-        return StreamingResponse(generate_stream(), media_type="text/event-stream")
-    
-    # Non-streaming request
-    return await service_router.proxy_request(
-        "model-service",
-        "POST",
-        "/generate",
-        json=request
-    )
-
-@app.post("/model/load-model")
-async def model_load(
-    request: Dict[str, Any]
-):
-    """Proxy to model service for model loading"""
-    return await service_router.proxy_request(
-        "model-service",
-        "POST", 
-        "/load-model",
-        json=request
-    )
-
-@app.get("/model/status")
-async def model_status():
-    """Proxy to model service for status"""
-    return await service_router.proxy_request(
-        "model-service",
-        "GET",
-        "/status"
-    )
+# LM Studio integration handled directly by chat service - no proxy needed
 
 # Chat Service Routes
 @app.post("/chat/conversation/start")
@@ -311,6 +255,26 @@ async def npc_list(
         f"/npcs?limit={limit}&offset={offset}"
     )
 
+# Additional NPC route for frontend compatibility
+@app.get("/api/npc/npcs")
+async def npc_list_api(
+    limit: int = 50,
+    offset: int = 0
+):
+    """API route for NPC list (frontend compatibility)"""
+    logger.info(f"🎯 HIT /api/npc/npcs endpoint with limit={limit}, offset={offset}")
+    try:
+        result = await service_router.proxy_request(
+            "npc-service",
+            "GET",
+            f"/npcs?limit={limit}&offset={offset}"
+        )
+        logger.info(f"✅ Proxy result: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Error in npc_list_api: {e}")
+        raise
+
 @app.post("/npcs/search")
 async def npc_search(request: Dict[str, Any]):
     """Proxy to NPC service for semantic search"""
@@ -375,7 +339,7 @@ async def monitor_alerts():
 @app.get("/services/status")
 async def get_all_service_status():
     """Get status of all backend services"""
-    return await service_router.get_service_health()
+    return await service_router.health_check_services()
 
 @app.get("/metrics")
 async def get_metrics():
@@ -414,6 +378,52 @@ async def get_metrics():
     except Exception as e:
         logger.error(f"Error generating metrics: {e}")
         return "# Error generating metrics"
+
+@app.websocket("/ws")
+async def websocket_proxy(websocket: WebSocket):
+    """Proxy WebSocket connections to chat service"""
+    await websocket.accept()
+    
+    # Extract token from query parameters
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=1008, reason="Missing token")
+        return
+    
+    # Connect to chat service WebSocket
+    chat_ws_url = "ws://localhost:8002/ws"
+    
+    try:
+        async with websockets.connect(chat_ws_url) as chat_ws:
+            logger.info("WebSocket proxy connection established")
+            
+            # Create tasks for bidirectional proxying
+            async def proxy_to_chat():
+                try:
+                    async for message in websocket.iter_text():
+                        await chat_ws.send(message)
+                except WebSocketDisconnect:
+                    logger.info("Client WebSocket disconnected")
+                except Exception as e:
+                    logger.error(f"Error proxying to chat service: {e}")
+            
+            async def proxy_from_chat():
+                try:
+                    async for message in chat_ws:
+                        await websocket.send_text(message)
+                except Exception as e:
+                    logger.error(f"Error proxying from chat service: {e}")
+            
+            # Run both proxy directions concurrently
+            await asyncio.gather(
+                proxy_to_chat(),
+                proxy_from_chat(),
+                return_exceptions=True
+            )
+            
+    except Exception as e:
+        logger.error(f"WebSocket proxy error: {e}")
+        await websocket.close(code=1011, reason="Internal server error")
 
 if __name__ == "__main__":
     import uvicorn
